@@ -6,7 +6,9 @@ import SwiftData
 @MainActor
 class BackupManager: ObservableObject {
     @Published var currentStatus: BackupStatus = .success
+    @Published var connectionStatus: ConnectionStatus = .unknown
     @Published var lastBackupTime: Date?
+    @Published var lastConnectionTestTime: Date?
     @Published var isRunning = false
     
     private let dataActor: BackupDataActor
@@ -80,11 +82,33 @@ class BackupManager: ObservableObject {
         lastBackupTime = Date()
     }
     
+    // MARK: - Public Connection Test Method
+    
+    func runConnectionTest() async {
+        print("🔄 Starting connection test...")
+        connectionStatus = .testing
+        lastConnectionTestTime = Date()
+        
+        let isConnected = await testConnection()
+        print("🔄 Connection test result: \(isConnected)")
+        connectionStatus = isConnected ? .connected : .failed
+        print("🔄 Connection status set to: \(connectionStatus)")
+    }
+    
     // MARK: - Background Work (No Database Access)
     
     private func performBackupWork() async -> (success: Bool, error: String?, filesCount: Int, totalSize: Int64) {
-        // Test connection
-        if !(await testConnection()) {
+        // Test connection and update status
+        print("🔄 Testing connection during backup...")
+        connectionStatus = .testing
+        lastConnectionTestTime = Date()
+        
+        let isConnected = await testConnection()
+        print("🔄 Backup connection test result: \(isConnected)")
+        connectionStatus = isConnected ? .connected : .failed
+        print("🔄 Backup connection status set to: \(connectionStatus)")
+        
+        if !isConnected {
             return (false, "Connection failed", 0, 0)
         }
         
@@ -277,7 +301,7 @@ class BackupManager: ObservableObject {
         if let lastSuccess = settings.lastSuccessfulBackup {
             let hoursSinceLastBackup = Date().timeIntervalSince(lastSuccess) / 3600
             //test switched <>
-            if hoursSinceLastBackup > Double(settings.backupIntervalHours) {
+            if hoursSinceLastBackup < Double(settings.backupIntervalHours) {
                 print("Backup skipped - last successful backup was \(Int(hoursSinceLastBackup)) hours ago")
                 return false
             }
