@@ -35,16 +35,6 @@
 			path = BackupStatus;
 			sourceTree = "<group>";
 		};
-		9585901D2E34EF57008A1637 /* BackupStatusTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = BackupStatusTests;
-			sourceTree = "<group>";
-		};
-		958590272E34EF57008A1637 /* BackupStatusUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = BackupStatusUITests;
-			sourceTree = "<group>";
-		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -76,8 +66,6 @@
 			isa = PBXGroup;
 			children = (
 				9585900C2E34EF56008A1637 /* BackupStatus */,
-				9585901D2E34EF57008A1637 /* BackupStatusTests */,
-				958590272E34EF57008A1637 /* BackupStatusUITests */,
 				9585900B2E34EF56008A1637 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -130,9 +118,6 @@
 			dependencies = (
 				9585901C2E34EF57008A1637 /* PBXTargetDependency */,
 			);
-			fileSystemSynchronizedGroups = (
-				9585901D2E34EF57008A1637 /* BackupStatusTests */,
-			);
 			name = BackupStatusTests;
 			packageProductDependencies = (
 			);
@@ -152,9 +137,6 @@
 			);
 			dependencies = (
 				958590262E34EF57008A1637 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				958590272E34EF57008A1637 /* BackupStatusUITests */,
 			);
 			name = BackupStatusUITests;
 			packageProductDependencies = (

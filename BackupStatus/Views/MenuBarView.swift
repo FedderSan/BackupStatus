@@ -1,14 +1,16 @@
-// MARK: - Updated MenuBarView
+// MARK: - Updated MenuBarView with Log Support
 import SwiftUI
 import SwiftData
 
 struct MenuBarView: View {
     @StateObject private var backupManager: BackupManager
+    @ObservedObject var logManager: LogManager
     @State private var timer: Timer?
     @Environment(\.openWindow) private var openWindow
     
-    init(modelContainer: ModelContainer) {
-        self._backupManager = StateObject(wrappedValue: BackupManager(modelContainer: modelContainer))
+    init(modelContainer: ModelContainer, logManager: LogManager) {
+        self._backupManager = StateObject(wrappedValue: BackupManager(modelContainer: modelContainer, logManager: logManager))
+        self.logManager = logManager
     }
     
     var body: some View {
@@ -63,6 +65,10 @@ struct MenuBarView: View {
             
             Button("View History") {
                 openWindow(id: "history")
+            }
+            
+            Button("View Log") {
+                openWindow(id: "log")
             }
             
             Button("Settings") {

@@ -1,12 +1,10 @@
 //
-//  DateFormatter.swift
+//  DateFormatter+Extensions.swift
 //  BackupStatus
 //
 //  Created by Daniel Feddersen on 26/07/2025.
 //
 
-
-// MARK: - Date Formatters
 import Foundation
 
 extension DateFormatter {

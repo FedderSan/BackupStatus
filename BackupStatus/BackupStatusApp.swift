@@ -8,10 +8,11 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - Enhanced App with SwiftData
+// MARK: - Enhanced App with SwiftData and Log Window
 @main
 struct BackupStatusApp: App {
     let modelContainer: ModelContainer
+    @StateObject private var logManager = LogManager()
     
     init() {
         do {
@@ -22,8 +23,8 @@ struct BackupStatusApp: App {
     }
     
     var body: some Scene {
-        MenuBarExtra("Backup Status", systemImage: "externaldrive.badge.checkmark") {
-            MenuBarView(modelContainer: modelContainer)
+        MenuBarExtra("Backup Status", systemImage: dynamicMenuBarIcon) {
+            MenuBarView(modelContainer: modelContainer, logManager: logManager)
         }
         .menuBarExtraStyle(.menu)
         
@@ -40,5 +41,26 @@ struct BackupStatusApp: App {
         .windowResizability(.contentSize)
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
+        
+        Window("Backup Log", id: "log") {
+            LogView(logManager: logManager)
+        }
+        .windowResizability(.contentSize)
+        .defaultSize(width: 800, height: 600)
+    }
+    
+    private var dynamicMenuBarIcon: String {
+        switch logManager.currentBackupStatus {
+        case .success:
+            return "externaldrive.badge.checkmark"
+        case .connectionError:
+            return "externaldrive.badge.wifi"
+        case .failed:
+            return "externaldrive.badge.xmark"
+        case .running:
+            return "externaldrive.badge.timemachine"
+        case .skipped:
+            return "externaldrive.badge.questionmark"
+        }
     }
 }
