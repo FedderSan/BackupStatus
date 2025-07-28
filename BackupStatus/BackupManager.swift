@@ -93,9 +93,15 @@ class BackupManager: ObservableObject {
     }
     
     func testConnection() async -> Bool {
-        // Test 1: Network reachability
-        if !(await testNetworkReachability()) {
-            print("❌ Network unreachable")
+        // Get settings from database
+        guard let settings = await dataActor.getSettings() else {
+            print("❌ No settings found in database")
+            return false
+        }
+        
+        // Test 1: Network reachability using database settings
+        if !(await testNetworkReachability(host: settings.serverHost)) {
+            print("❌ Network unreachable to \(settings.serverHost)")
             return false
         }
         
@@ -105,22 +111,22 @@ class BackupManager: ObservableObject {
             return false
         }
         
-        print("✅ Connection tests passed")
+        print("✅ Connection tests passed for \(settings.serverHost):\(settings.serverPort)")
         return true
     }
     
-    private func testNetworkReachability() async -> Bool {
+    private func testNetworkReachability(host: String) async -> Bool {
         return await withCheckedContinuation { continuation in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/sbin/ping")
-            task.arguments = ["-c", "1", "-W", "5000", "MiniServer-DF"]
+            task.arguments = ["-c", "1", "-W", "5000", host]
             
             do {
                 try task.run()
                 task.waitUntilExit()
                 continuation.resume(returning: task.terminationStatus == 0)
             } catch {
-                print("Failed to run ping: \(error)")
+                print("Failed to run ping to \(host): \(error)")
                 continuation.resume(returning: false)
             }
         }
@@ -294,5 +300,15 @@ class BackupManager: ObservableObject {
     
     func cleanOldSessions() async {
         await dataActor.cleanOldSessions()
+    }
+    
+    // MARK: - Settings Access Methods
+    
+    func getSettings() async -> BackupSettings? {
+        return await dataActor.getSettings()
+    }
+    
+    func getOrCreateSettings() async -> BackupSettings {
+        return await dataActor.getOrCreateSettings()
     }
 }

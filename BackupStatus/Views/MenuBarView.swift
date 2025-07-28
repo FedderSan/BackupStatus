@@ -5,6 +5,7 @@ import SwiftData
 struct MenuBarView: View {
     @State private var backupManager: BackupManager
     @State private var timer: Timer?
+    @Environment(\.openWindow) private var openWindow
     
     init(modelContainer: ModelContainer) {
         self._backupManager = State(wrappedValue: BackupManager(modelContainer: modelContainer))
@@ -38,8 +39,12 @@ struct MenuBarView: View {
             }
             
             Button("View History") {
-                            //openWindow(id: "history")
-                        }
+                openWindow(id: "history")
+            }
+            
+            Button("Settings") {
+                openWindow(id: "settings")
+            }
             
             Divider()
             
@@ -63,4 +68,4 @@ struct MenuBarView: View {
             }
         }
     }
-}
+}	

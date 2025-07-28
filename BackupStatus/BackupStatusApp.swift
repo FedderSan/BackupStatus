@@ -31,5 +31,14 @@ struct BackupStatusApp: App {
             BackupHistoryView()
                 .modelContainer(modelContainer)
         }
+        .windowResizability(.contentSize)
+        
+        Window("Settings", id: "settings") {
+            PreferencesView()
+                .modelContainer(modelContainer)
+        }
+        .windowResizability(.contentSize)
+        .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified)
     }
 }
