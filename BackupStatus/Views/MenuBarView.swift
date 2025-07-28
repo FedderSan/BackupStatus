@@ -38,7 +38,7 @@ struct MenuBarView: View {
             }
             
             Button("View History") {
-                            openWindow(id: "history")
+                            //openWindow(id: "history")
                         }
             
             Divider()
