@@ -64,7 +64,7 @@ struct LogView: View {
                 // Auto-scroll toggle
                 Toggle("Auto-scroll", isOn: $autoScroll)
                     .toggleStyle(CheckboxToggleStyle())
-                
+                		
                 // Clear logs button
                 Button("Clear") {
                     logManager.clearLogs()

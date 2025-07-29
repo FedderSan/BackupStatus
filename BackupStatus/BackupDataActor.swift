@@ -98,13 +98,7 @@ actor BackupDataActor {
     }
 }
 
-// MARK: - Backup Error Types
 
-enum BackupError: Error {
-    case sessionNotFound
-    case connectionFailed
-    case backupFailed(String)
-}
 
 
 

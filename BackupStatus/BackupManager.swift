@@ -1,6 +1,5 @@
-// MARK: - Main Backup Manager (UI Thread) with Logging
+// MARK: - Enhanced BackupManager with Dynamic Configuration
 import Foundation
-//import SwiftUI
 import SwiftData
 
 @MainActor
@@ -14,12 +13,9 @@ class BackupManager: ObservableObject {
     private let dataActor: BackupDataActor
     private let logManager: LogManager
     
-    // Configuration
+    // Dynamic configuration - loaded from settings
     private let rclonePath = "/usr/local/bin/rclone"
-    //private let rclonePath = "/opt/homebrew/bin/rclone"
     private let sourcePath = "/Users/danielfeddersen/NextCloudMiniDaniel/Documents/"
-    private let remoteName = "nextcloud-backup"
-    private let remoteBasePath = "BackupFolderLaptop"
     
     init(modelContainer: ModelContainer, logManager: LogManager) {
         self.dataActor = BackupDataActor(modelContainer: modelContainer)
@@ -29,11 +25,57 @@ class BackupManager: ObservableObject {
         }
     }
     
+    // MARK: - Dynamic Configuration Methods
+    
+    private func getBackupConfiguration() async -> (remoteName: String, remoteBasePath: String)? {
+        guard let settings = await dataActor.getSettings() else {
+            logManager.log("No settings found for backup configuration", level: .error)
+            return nil
+        }
+        
+        return (
+            remoteName: settings.remoteName,
+            remoteBasePath: settings.webdavPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        )
+    }
+    
+    private func ensureRcloneConfig() async -> Bool {
+        guard let settings = await dataActor.getSettings() else {
+            logManager.log("No settings found for rclone configuration", level: .error)
+            return false
+        }
+        
+        let configPath = "/Users/danielfeddersen/.config/rclone/rclone.conf"
+        let configContent = settings.generateRcloneConfig()
+        
+        do {
+            // Check if config directory exists, create if not
+            let configDir = URL(fileURLWithPath: configPath).deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+            
+            // Write the configuration
+            try configContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+            logManager.log("Updated rclone configuration at \(configPath)", level: .debug)
+            return true
+        } catch {
+            logManager.log("Failed to write rclone config: \(error)", level: .error)
+            return false
+        }
+    }
+    
     func runBackup() async {
         guard await shouldRunBackup() else {
             currentStatus = .skipped
             logManager.updateBackupStatus(.skipped)
             logManager.log("Backup skipped - too soon since last successful backup", level: .info)
+            return
+        }
+        
+        // Ensure rclone configuration is up to date
+        guard await ensureRcloneConfig() else {
+            currentStatus = .failed
+            logManager.updateBackupStatus(.failed)
+            logManager.log("Failed to configure rclone", level: .error)
             return
         }
         
@@ -97,7 +139,7 @@ class BackupManager: ObservableObject {
         logManager.log("Backup process finished with status: \(currentStatus.rawValue)", level: .info)
     }
     
-    // MARK: - Public Connection Test Method
+    // MARK: - Enhanced Connection Test
     
     func runConnectionTest() async {
         logManager.log("🔄 Starting connection test...", level: .info)
@@ -110,31 +152,16 @@ class BackupManager: ObservableObject {
         logManager.log("🔄 Connection status set to: \(connectionStatus)", level: .debug)
     }
     
-    // MARK: - Background Work (No Database Access)
-    
-    private func performBackupWork() async -> (success: Bool, error: String?, filesCount: Int, totalSize: Int64) {
-        // Test connection and update status
-        logManager.log("🔄 Testing connection during backup...", level: .debug)
-        connectionStatus = .testing
-        lastConnectionTestTime = Date()
-        
-        let isConnected = await testConnection()
-        logManager.log("🔄 Backup connection test result: \(isConnected)", level: .debug)
-        connectionStatus = isConnected ? .connected : .failed
-        logManager.log("🔄 Backup connection status set to: \(connectionStatus)", level: .debug)
-        
-        if !isConnected {
-            return (false, "Connection failed", 0, 0)
-        }
-        
-        // Do backup
-        return await performNativeBackup()
-    }
-    
     func testConnection() async -> Bool {
         // Get settings from database
         guard let settings = await dataActor.getSettings() else {
             logManager.log("❌ No settings found in database", level: .error)
+            return false
+        }
+        
+        // Ensure rclone config is up to date
+        guard await ensureRcloneConfig() else {
+            logManager.log("❌ Failed to configure rclone", level: .error)
             return false
         }
         
@@ -144,14 +171,69 @@ class BackupManager: ObservableObject {
             return false
         }
         
-        // Test 2: rclone connection
-        if !(await testRcloneConnection()) {
+        // Test 2: WebDAV-specific connection test
+        if settings.webdavEnabled {
+            if !(await testWebDAVConnection(settings: settings)) {
+                logManager.log("❌ WebDAV connection failed", level: .error)
+                return false
+            }
+        }
+        
+        // Test 3: rclone connection
+        if !(await testRcloneConnection(remoteName: settings.remoteName)) {
             logManager.log("❌ rclone connection failed", level: .error)
             return false
         }
         
-        logManager.log("✅ Connection tests passed for \(settings.serverHost):\(settings.serverPort)", level: .info)
+        logManager.log("✅ All connection tests passed for \(settings.serverHost):\(settings.serverPort)", level: .info)
         return true
+    }
+    
+    private func testWebDAVConnection(settings: BackupSettings) async -> Bool {
+        logManager.log("Testing WebDAV connection to \(settings.fullWebDAVURL)", level: .debug)
+        
+        return await withCheckedContinuation { continuation in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+            
+            var arguments = [
+                "-s", "-f", "-X", "PROPFIND",
+                "--user", "\(settings.webdavUsername):\(settings.webdavPassword)",
+                "-H", "Content-Type: text/xml",
+                "-H", "Depth: 0",
+                "--max-time", "10"
+            ]
+            
+            if !settings.webdavVerifySSL {
+                arguments.append("-k")
+            }
+            
+            arguments.append(settings.fullWebDAVURL)
+            task.arguments = arguments
+            
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = pipe
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                let success = task.terminationStatus == 0
+                
+                if !success {
+                    let errorData = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                    logManager.log("WebDAV connection failed: \(errorOutput)", level: .error)
+                } else {
+                    logManager.log("WebDAV connection successful", level: .debug)
+                }
+                
+                continuation.resume(returning: success)
+            } catch {
+                logManager.log("WebDAV test error: \(error)", level: .error)
+                continuation.resume(returning: false)
+            }
+        }
     }
     
     private func testNetworkReachability(host: String) async -> Bool {
@@ -174,8 +256,8 @@ class BackupManager: ObservableObject {
         }
     }
     
-    private func testRcloneConnection() async -> Bool {
-        logManager.log("Testing rclone connection", level: .debug)
+    private func testRcloneConnection(remoteName: String) async -> Bool {
+        logManager.log("Testing rclone connection to \(remoteName):", level: .debug)
         return await withCheckedContinuation { continuation in
             let task = Process()
             
@@ -211,7 +293,32 @@ class BackupManager: ObservableObject {
         }
     }
     
-    private func performNativeBackup() async -> (success: Bool, error: String?, filesCount: Int, totalSize: Int64) {
+    // MARK: - Enhanced Backup Work with Dynamic Configuration
+    
+    private func performBackupWork() async -> (success: Bool, error: String?, filesCount: Int, totalSize: Int64) {
+        guard let config = await getBackupConfiguration() else {
+            return (false, "Failed to load backup configuration", 0, 0)
+        }
+        
+        // Test connection and update status
+        logManager.log("🔄 Testing connection during backup...", level: .debug)
+        connectionStatus = .testing
+        lastConnectionTestTime = Date()
+        
+        let isConnected = await testConnection()
+        logManager.log("🔄 Backup connection test result: \(isConnected)", level: .debug)
+        connectionStatus = isConnected ? .connected : .failed
+        logManager.log("🔄 Backup connection status set to: \(connectionStatus)", level: .debug)
+        
+        if !isConnected {
+            return (false, "Connection failed", 0, 0)
+        }
+        
+        // Do backup with dynamic configuration
+        return await performNativeBackup(remoteName: config.remoteName, remoteBasePath: config.remoteBasePath)
+    }
+    
+    private func performNativeBackup(remoteName: String, remoteBasePath: String) async -> (success: Bool, error: String?, filesCount: Int, totalSize: Int64) {
         let dateDaily = DateFormatter.dailyFormat.string(from: Date())
         let dateVersion = DateFormatter.versionFormat.string(from: Date())
         
@@ -255,7 +362,7 @@ class BackupManager: ObservableObject {
         logManager.log("Version backup completed successfully", level: .info)
         
         // Get file count and size
-        let stats = await getBackupStats(dateDaily)
+        let stats = await getBackupStats(remoteName: remoteName, remoteBasePath: remoteBasePath, dateFolder: dateDaily)
         logManager.log("Backup statistics: \(stats.fileCount) files, \(ByteCountFormatter.string(fromByteCount: stats.totalSize, countStyle: .file))", level: .info)
         
         return (true, nil, stats.fileCount, stats.totalSize)
@@ -299,7 +406,7 @@ class BackupManager: ObservableObject {
         }
     }
     
-    private func getBackupStats(_ dateFolder: String) async -> (fileCount: Int, totalSize: Int64) {
+    private func getBackupStats(remoteName: String, remoteBasePath: String, dateFolder: String) async -> (fileCount: Int, totalSize: Int64) {
         logManager.log("Getting backup statistics for \(dateFolder)", level: .debug)
         let result = await runRcloneCommand([
             "size",
@@ -312,17 +419,23 @@ class BackupManager: ObservableObject {
             return (0, 0)
         }
         
-        // TODO: Parse actual JSON response
+        // TODO: Parse actual JSON response from rclone size command
+        // For now, return placeholder values
         return (150, 1024000)
     }
     
     private func performCleanupWork() async {
+        guard let config = await getBackupConfiguration() else {
+            logManager.log("Failed to load configuration for cleanup", level: .error)
+            return
+        }
+        
         logManager.log("Starting cleanup process", level: .info)
         
         logManager.log("Cleaning old daily backups (older than 14 days)", level: .debug)
         let dailyCleanup = await runRcloneCommand([
             "delete",
-            "\(remoteName):\(remoteBasePath)/daily/",
+            "\(config.remoteName):\(config.remoteBasePath)/daily/",
             "--min-age", "14d"
         ])
         
@@ -335,7 +448,7 @@ class BackupManager: ObservableObject {
         logManager.log("Cleaning old version backups (older than 30 days)", level: .debug)
         let versionCleanup = await runRcloneCommand([
             "delete",
-            "\(remoteName):\(remoteBasePath)/versions/",
+            "\(config.remoteName):\(config.remoteBasePath)/versions/",
             "--min-age", "30d"
         ])
         
@@ -363,7 +476,6 @@ class BackupManager: ObservableObject {
         
         if let lastSuccess = settings.lastSuccessfulBackup {
             let hoursSinceLastBackup = Date().timeIntervalSince(lastSuccess) / 3600
-            //test switched <>
             if hoursSinceLastBackup < Double(settings.backupIntervalHours) {
                 logManager.log("Backup skipped - last successful backup was \(Int(hoursSinceLastBackup)) hours ago", level: .info)
                 return false
@@ -401,4 +513,68 @@ class BackupManager: ObservableObject {
     func getOrCreateSettings() async -> BackupSettings {
         return await dataActor.getOrCreateSettings()
     }
+    
+    // MARK: - WebDAV Specific Methods
+    
+    func testWebDAVCredentials() async -> Bool {
+        guard let settings = await dataActor.getSettings() else {
+            return false
+        }
+        
+        return await testWebDAVConnection(settings: settings)
+    }
+    
+    func validateWebDAVPath() async -> Bool {
+        guard let settings = await dataActor.getSettings() else {
+            return false
+        }
+        
+        logManager.log("Validating WebDAV path: \(settings.webdavPath)", level: .debug)
+        
+        return await withCheckedContinuation { continuation in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+            
+            var arguments = [
+                "-s", "-f", "-X", "PROPFIND",
+                "--user", "\(settings.webdavUsername):\(settings.webdavPassword)",
+                "-H", "Content-Type: text/xml",
+                "-H", "Depth: 1",
+                "--max-time", "10"
+            ]
+            
+            if !settings.webdavVerifySSL {
+                arguments.append("-k")
+            }
+            
+            let fullPath = settings.fullWebDAVURL + settings.webdavPath
+            arguments.append(fullPath)
+            task.arguments = arguments
+            
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = pipe
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                let success = task.terminationStatus == 0
+                
+                if success {
+                    logManager.log("WebDAV path validation successful", level: .debug)
+                } else {
+                    let errorData = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                    logManager.log("WebDAV path validation failed: \(errorOutput)", level: .error)
+                }
+                
+                continuation.resume(returning: success)
+            } catch {
+                logManager.log("WebDAV path validation error: \(error)", level: .error)
+                continuation.resume(returning: false)
+            }
+        }
+    }
 }
+
+

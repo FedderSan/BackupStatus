@@ -15,6 +15,29 @@ struct BackupStatusApp: App {
     @StateObject private var logManager = LogManager()
     
     init() {
+        
+        // Define schema
+            let schema = Schema([BackupSession.self, BackupSettings.self])
+            let config = ModelConfiguration("Default", schema: schema)
+
+        let storeURL = config.url // this gives '.../default.store'
+        let baseURL = storeURL.deletingPathExtension()
+        let extensions = ["store", "store-shm", "store-wal"]
+
+        for ext in extensions {
+            let fileURL = baseURL.appendingPathExtension(ext)
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                do {
+                    try FileManager.default.removeItem(at: fileURL)
+                    print("Deleted: \(fileURL.lastPathComponent)")
+                } catch {
+                    print("Error deleting \(fileURL.lastPathComponent): \(error)")
+                }
+            }
+        }
+        
+        
+        
         do {
             modelContainer = try ModelContainer(for: BackupSession.self, BackupSettings.self)
         } catch {
