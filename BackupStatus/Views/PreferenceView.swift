@@ -257,6 +257,7 @@ struct PreferencesView: View {
         return "\(scheme)://\(serverHost)\(port)\(webdavURL)"
     }
     
+    // Update the generateRcloneConfigPreview method to show obscured password
     private func generateRcloneConfigPreview() -> String {
         return """
         [\(remoteName)]
@@ -264,32 +265,12 @@ struct PreferencesView: View {
         url = \(constructFullURL())
         vendor = nextcloud
         user = \(webdavUsername)
-        pass = \(webdavPassword.isEmpty ? "<password>" : "***")
+        pass = \(webdavPassword.isEmpty ? "<password will be obscured>" : "<password obscured>")
         \(webdavVerifySSL && webdavUseHTTPS ? "" : "insecure_skip_verify = true")
         """
     }
     
-    private func testWebDAVConnection() {
-        connectionTestResult = "Testing connection..."
-        
-        Task {
-            guard let settings = settings else {
-                connectionTestResult = "❌ No settings available"
-                return
-            }
-            
-            // Test WebDAV connection using curl
-            let success = await testWebDAVWithCurl(settings: settings)
-            
-            DispatchQueue.main.async {
-                if success {
-                    self.connectionTestResult = "✅ WebDAV connection successful"
-                } else {
-                    self.connectionTestResult = "❌ WebDAV connection failed"
-                }
-            }
-        }
-    }
+    
     
     private func testWebDAVWithCurl(settings: BackupSettings) async -> Bool {
         return await withCheckedContinuation { continuation in
@@ -325,6 +306,7 @@ struct PreferencesView: View {
         }
     }
     
+    // Replace the loadSettings method in PreferencesView.swift
     private func loadSettings() {
         let descriptor = FetchDescriptor<BackupSettings>()
         if let existingSettings = try? modelContext.fetch(descriptor).first {
@@ -337,12 +319,20 @@ struct PreferencesView: View {
             webdavEnabled = existingSettings.webdavEnabled
             webdavURL = existingSettings.webdavURL
             webdavUsername = existingSettings.webdavUsername
-            webdavPassword = existingSettings.webdavPassword
             webdavPath = existingSettings.webdavPath
             webdavUseHTTPS = existingSettings.webdavUseHTTPS
             webdavVerifySSL = existingSettings.webdavVerifySSL
             remoteName = existingSettings.remoteName
             remoteType = existingSettings.remoteType
+            
+            // Load the plain password asynchronously
+            Task {
+                if let plainPassword = await existingSettings.getPlainPassword() {
+                    await MainActor.run {
+                        webdavPassword = plainPassword
+                    }
+                }
+            }
         } else {
             // Create default settings
             let newSettings = BackupSettings()
@@ -359,42 +349,67 @@ struct PreferencesView: View {
         webdavEnabled = settings.webdavEnabled
         webdavURL = settings.webdavURL
         webdavUsername = settings.webdavUsername
-        webdavPassword = settings.webdavPassword
         webdavPath = settings.webdavPath
         webdavUseHTTPS = settings.webdavUseHTTPS
         webdavVerifySSL = settings.webdavVerifySSL
         remoteName = settings.remoteName
         remoteType = settings.remoteType
+        
+        // For new settings, the password will be empty initially
+        webdavPassword = ""
+        
+        // If there's an obscured password, try to reveal it
+        Task {
+            if !settings.webdavPasswordObscured.isEmpty,
+               let plainPassword = await settings.getPlainPassword() {
+                await MainActor.run {
+                    webdavPassword = plainPassword
+                }
+            }
+        }
     }
     
+    // Replace the saveSettings method in PreferencesView.swift
     private func saveSettings() {
         guard let settings = settings else { return }
         
-        // Save basic settings
-        settings.serverHost = serverHost
-        settings.serverPort = Int(serverPort) ?? 8081
-        settings.backupIntervalHours = backupInterval
+        connectionTestResult = "Saving settings..."
         
-        // Save WebDAV settings
-        settings.webdavEnabled = webdavEnabled
-        settings.webdavURL = webdavURL
-        settings.webdavUsername = webdavUsername
-        settings.webdavPassword = webdavPassword
-        settings.webdavPath = webdavPath
-        settings.webdavUseHTTPS = webdavUseHTTPS
-        settings.webdavVerifySSL = webdavVerifySSL
-        settings.remoteName = remoteName
-        settings.remoteType = remoteType
-        
-        do {
-            try modelContext.save()
-            connectionTestResult = "✅ Settings saved successfully"
+        Task {
+            // Save basic settings
+            settings.serverHost = serverHost
+            settings.serverPort = Int(serverPort) ?? 8081
+            settings.backupIntervalHours = backupInterval
             
-            // Optionally update rclone config file
-            updateRcloneConfig()
+            // Save WebDAV settings
+            settings.webdavEnabled = webdavEnabled
+            settings.webdavURL = webdavURL
+            settings.webdavUsername = webdavUsername
+            settings.webdavPath = webdavPath
+            settings.webdavUseHTTPS = webdavUseHTTPS
+            settings.webdavVerifySSL = webdavVerifySSL
+            settings.remoteName = remoteName
+            settings.remoteType = remoteType
             
-        } catch {
-            connectionTestResult = "❌ Failed to save settings: \(error.localizedDescription)"
+            // Obscure and save the password
+            if !webdavPassword.isEmpty {
+                await settings.setPassword(webdavPassword)
+            }
+            
+            do {
+                try modelContext.save()
+                
+                // Update rclone config with obscured password
+                try settings.updateRcloneConfig()
+                
+                await MainActor.run {
+                    connectionTestResult = "✅ Settings saved successfully"
+                }
+            } catch {
+                await MainActor.run {
+                    connectionTestResult = "❌ Failed to save settings: \(error.localizedDescription)"
+                }
+            }
         }
     }
     
@@ -406,6 +421,77 @@ struct PreferencesView: View {
             connectionTestResult = "✅ rclone configuration updated successfully"
         } catch {
             connectionTestResult = "❌ Failed to update rclone config: \(error.localizedDescription)"
+        }
+    }
+    
+    // Replace the testWebDAVConnection method in PreferencesView.swift
+    private func testWebDAVConnection() {
+        connectionTestResult = "Testing connection..."
+        
+        Task {
+            // Create a temporary settings object for testing
+            let tempSettings = BackupSettings()
+            tempSettings.serverHost = serverHost
+            tempSettings.serverPort = Int(serverPort) ?? 8081
+            tempSettings.webdavEnabled = webdavEnabled
+            tempSettings.webdavURL = webdavURL
+            tempSettings.webdavUsername = webdavUsername
+            tempSettings.webdavPath = webdavPath
+            tempSettings.webdavUseHTTPS = webdavUseHTTPS
+            tempSettings.webdavVerifySSL = webdavVerifySSL
+            
+            // Set the password for testing
+            await tempSettings.setPassword(webdavPassword)
+            
+            // Test WebDAV connection using the plain password
+            let success = await testWebDAVWithSettings(tempSettings)
+            
+            await MainActor.run {
+                if success {
+                    self.connectionTestResult = "✅ WebDAV connection successful"
+                } else {
+                    self.connectionTestResult = "❌ WebDAV connection failed"
+                }
+            }
+        }
+    }
+
+    // New helper method for testing WebDAV with settings object
+    private func testWebDAVWithSettings(_ settings: BackupSettings) async -> Bool {
+        guard let plainPassword = await settings.getPlainPassword() else {
+            return false
+        }
+        
+        return await withCheckedContinuation { continuation in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+            
+            var arguments = [
+                "-s", "-f", "-X", "PROPFIND",
+                "--user", "\(settings.webdavUsername):\(plainPassword)",
+                "-H", "Content-Type: text/xml",
+                "-H", "Depth: 0",
+                "--max-time", "10"
+            ]
+            
+            if !settings.webdavVerifySSL {
+                arguments.append("-k")
+            }
+            
+            arguments.append(settings.fullWebDAVURL)
+            task.arguments = arguments
+            
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = pipe
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                continuation.resume(returning: task.terminationStatus == 0)
+            } catch {
+                continuation.resume(returning: false)
+            }
         }
     }
 }

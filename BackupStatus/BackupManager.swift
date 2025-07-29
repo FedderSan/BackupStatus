@@ -188,9 +188,15 @@ class BackupManager: ObservableObject {
         logManager.log("✅ All connection tests passed for \(settings.serverHost):\(settings.serverPort)", level: .info)
         return true
     }
-    
+    // Replace the testWebDAVConnection method in BackupManager.swift
     private func testWebDAVConnection(settings: BackupSettings) async -> Bool {
         logManager.log("Testing WebDAV connection to \(settings.fullWebDAVURL)", level: .debug)
+        
+        // Get the plain password for connection testing
+        guard let plainPassword = await settings.getPlainPassword() else {
+            logManager.log("Failed to retrieve plain password for WebDAV test", level: .error)
+            return false
+        }
         
         return await withCheckedContinuation { continuation in
             let task = Process()
@@ -198,7 +204,7 @@ class BackupManager: ObservableObject {
             
             var arguments = [
                 "-s", "-f", "-X", "PROPFIND",
-                "--user", "\(settings.webdavUsername):\(settings.webdavPassword)",
+                "--user", "\(settings.webdavUsername):\(plainPassword)",
                 "-H", "Content-Type: text/xml",
                 "-H", "Depth: 0",
                 "--max-time", "10"
@@ -524,6 +530,7 @@ class BackupManager: ObservableObject {
         return await testWebDAVConnection(settings: settings)
     }
     
+    // Replace the validateWebDAVPath method in BackupManager.swift
     func validateWebDAVPath() async -> Bool {
         guard let settings = await dataActor.getSettings() else {
             return false
@@ -531,13 +538,19 @@ class BackupManager: ObservableObject {
         
         logManager.log("Validating WebDAV path: \(settings.webdavPath)", level: .debug)
         
+        // Get the plain password for path validation
+        guard let plainPassword = await settings.getPlainPassword() else {
+            logManager.log("Failed to retrieve plain password for WebDAV path validation", level: .error)
+            return false
+        }
+        
         return await withCheckedContinuation { continuation in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
             
             var arguments = [
                 "-s", "-f", "-X", "PROPFIND",
-                "--user", "\(settings.webdavUsername):\(settings.webdavPassword)",
+                "--user", "\(settings.webdavUsername):\(plainPassword)",
                 "-H", "Content-Type: text/xml",
                 "-H", "Depth: 1",
                 "--max-time", "10"

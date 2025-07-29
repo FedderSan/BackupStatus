@@ -21,7 +21,7 @@ class BackupSettings {
     var webdavEnabled: Bool
     var webdavURL: String
     var webdavUsername: String
-    var webdavPassword: String
+    var webdavPasswordObscured: String  // Store the obscured password
     var webdavPath: String
     var webdavUseHTTPS: Bool
     var webdavVerifySSL: Bool
@@ -40,9 +40,10 @@ class BackupSettings {
         
         // WebDAV defaults
         self.webdavEnabled = true
-        self.webdavURL = "http://MiniServer-DF:8081/remote.php/dav/files/daniel"
+        //http://MiniServer-DF:8081
+        self.webdavURL = "/remote.php/dav/files/daniel"
         self.webdavUsername = "danielfeddersen@gmail.com"
-        self.webdavPassword = "6yw94vz2malsy1PIlPIk1w6p_XxL_zdgCzP_FeHWQAbpeg"
+        self.webdavPasswordObscured = "" // Will be set when password is provided
         self.webdavPath = "/BackupFolderLaptop"
         self.webdavUseHTTPS = false
         self.webdavVerifySSL = true
@@ -51,6 +52,31 @@ class BackupSettings {
         self.remoteName = "nextcloud-backup"
         self.remoteType = .webdav
     }
+    
+    // MARK: - Password Management Methods
+    
+    /// Sets the password by obscuring it first
+    func setPassword(_ plainPassword: String) async {
+        if let obscured = await RclonePasswordHelper.shared.obscurePassword(plainPassword) {
+            self.webdavPasswordObscured = obscured
+        } else {
+            print("Failed to obscure password, storing empty string")
+            self.webdavPasswordObscured = ""
+        }
+    }
+    
+    /// Gets the plain text password by revealing the obscured one
+    func getPlainPassword() async -> String? {
+        guard !webdavPasswordObscured.isEmpty else { return nil }
+        return await RclonePasswordHelper.shared.revealPassword(webdavPasswordObscured)
+    }
+    
+    /// Gets the obscured password for rclone config
+    var obscuredPassword: String {
+        return webdavPasswordObscured
+    }
+    
+    // MARK: - Computed Properties
     
     // Computed property for full WebDAV URL
     var fullWebDAVURL: String {
