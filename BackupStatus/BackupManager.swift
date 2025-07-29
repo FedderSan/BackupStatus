@@ -25,17 +25,19 @@ class BackupManager: ObservableObject {
         }
     }
     
-    // MARK: - Dynamic Configuration Methods
-    
+    // Also update the getBackupConfiguration method to use the correct remote path
     private func getBackupConfiguration() async -> (remoteName: String, remoteBasePath: String)? {
         guard let settings = await dataActor.getSettings() else {
             logManager.log("No settings found for backup configuration", level: .error)
             return nil
         }
         
+        // Clean the webdavPath to remove leading/trailing slashes for rclone
+        let cleanPath = settings.webdavPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        
         return (
             remoteName: settings.remoteName,
-            remoteBasePath: settings.webdavPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            remoteBasePath: cleanPath
         )
     }
     
@@ -188,9 +190,13 @@ class BackupManager: ObservableObject {
         logManager.log("✅ All connection tests passed for \(settings.serverHost):\(settings.serverPort)", level: .info)
         return true
     }
+    // MARK: - URL Construction Fixes for BackupManager.swift
     // Replace the testWebDAVConnection method in BackupManager.swift
+
     private func testWebDAVConnection(settings: BackupSettings) async -> Bool {
-        logManager.log("Testing WebDAV connection to \(settings.fullWebDAVURL)", level: .debug)
+        // Use the base WebDAV URL for connection testing, not including the backup path
+        let testURL = settings.fullWebDAVURL
+        logManager.log("Testing WebDAV connection to \(testURL)", level: .debug)
         
         // Get the plain password for connection testing
         guard let plainPassword = await settings.getPlainPassword() else {
@@ -214,7 +220,8 @@ class BackupManager: ObservableObject {
                 arguments.append("-k")
             }
             
-            arguments.append(settings.fullWebDAVURL)
+            // Use the base WebDAV URL for testing connection
+            arguments.append(testURL)
             task.arguments = arguments
             
             let pipe = Pipe()
@@ -536,7 +543,9 @@ class BackupManager: ObservableObject {
             return false
         }
         
-        logManager.log("Validating WebDAV path: \(settings.webdavPath)", level: .debug)
+        // Use the full WebDAV URL with path for path validation
+        let fullPathURL = settings.fullWebDAVURLWithPath
+        logManager.log("Validating WebDAV path: \(fullPathURL)", level: .debug)
         
         // Get the plain password for path validation
         guard let plainPassword = await settings.getPlainPassword() else {
@@ -560,8 +569,8 @@ class BackupManager: ObservableObject {
                 arguments.append("-k")
             }
             
-            let fullPath = settings.fullWebDAVURL + settings.webdavPath
-            arguments.append(fullPath)
+            // Use the full URL with backup path for path validation
+            arguments.append(fullPathURL)
             task.arguments = arguments
             
             let pipe = Pipe()

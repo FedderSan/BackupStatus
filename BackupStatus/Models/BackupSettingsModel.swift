@@ -40,7 +40,7 @@ class BackupSettings {
         
         // WebDAV defaults
         self.webdavEnabled = true
-        //http://MiniServer-DF:8081
+        // Changed: Only store the path part, not the full URL
         self.webdavURL = "/remote.php/dav/files/daniel"
         self.webdavUsername = "danielfeddersen@gmail.com"
         self.webdavPasswordObscured = "" // Will be set when password is provided
@@ -78,35 +78,57 @@ class BackupSettings {
     
     // MARK: - Computed Properties
     
-    // Computed property for full WebDAV URL
+    // Fixed: Properly construct the base WebDAV URL without the backup path
     var fullWebDAVURL: String {
         let scheme = webdavUseHTTPS ? "https" : "http"
         let port = serverPort != (webdavUseHTTPS ? 443 : 80) ? ":\(serverPort)" : ""
-        return "\(scheme)://\(serverHost)\(port)\(webdavURL)"
+        
+        // Clean webdavURL to ensure it starts with /
+        let cleanWebdavURL = webdavURL.hasPrefix("/") ? webdavURL : "/\(webdavURL)"
+        
+        return "\(scheme)://\(serverHost)\(port)\(cleanWebdavURL)"
+    }
+    
+    // New: Get the complete WebDAV URL including the backup path
+    var fullWebDAVURLWithPath: String {
+        let baseURL = fullWebDAVURL
+        let cleanPath = webdavPath.hasPrefix("/") ? webdavPath : "/\(webdavPath)"
+        return baseURL + cleanPath
     }
     
     // Computed property for generating rclone config path
     var rcloneConfigPath: String {
         return "/Users/danielfeddersen/.config/rclone/rclone.conf"
     }
-}
-
-enum RemoteType: String, CaseIterable, Codable {
-    case webdav = "webdav"
-    case s3 = "s3"
-    case sftp = "sftp"
-    case ftp = "ftp"
     
-    var displayName: String {
-        switch self {
-        case .webdav:
-            return "WebDAV"
-        case .s3:
-            return "Amazon S3"
-        case .sftp:
-            return "SFTP"
-        case .ftp:
-            return "FTP"
-        }
+    // MARK: - rclone Configuration Generation
+    
+    func generateRcloneConfig() -> String {
+        let sslVerify = webdavVerifySSL && webdavUseHTTPS ? "" : "\ninsecure_skip_verify = true"
+        
+        return """
+        [\(remoteName)]
+        type = webdav
+        url = \(fullWebDAVURL)
+        vendor = nextcloud	
+        user = \(webdavUsername)
+        pass = \(webdavPasswordObscured)
+        bearer_token_command = \(sslVerify)
+        """
+    }
+    
+    func updateRcloneConfig() throws {
+        let configPath = rcloneConfigPath
+        let configContent = generateRcloneConfig()
+        
+        // Check if config directory exists, create if not
+        let configDir = URL(fileURLWithPath: configPath).deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        
+        // Write the configuration
+        try configContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+        print("Updated rclone configuration at \(configPath)")
     }
 }
+
+

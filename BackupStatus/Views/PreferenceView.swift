@@ -184,17 +184,34 @@ struct PreferencesView: View {
                     .disabled(!webdavEnabled || !webdavUseHTTPS)
             }
             
+            // Update the Preview section in webdavSettingsView
             Section("Preview") {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Full WebDAV URL:")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(constructFullURL())
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(8)
-                        .background(Color.gray.opacity(0.1))
-                        .cornerRadius(4)
+                VStack(alignment: .leading, spacing: 8) {
+                    // Base WebDAV URL (used for rclone config)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Base WebDAV URL (for rclone):")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(constructFullURL())
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(8)
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+                    
+                    // Full backup URL (what will actually be accessed)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Full backup URL (base + backup path):")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(constructFullURLWithPath())
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(8)
+                            .background(Color.green.opacity(0.1))
+                            .cornerRadius(4)
+                    }
                 }
             }
         }
@@ -251,22 +268,35 @@ struct PreferencesView: View {
         .padding()
     }
     
+    // Replace the constructFullURL method in PreferencesView.swift
     private func constructFullURL() -> String {
         let scheme = webdavUseHTTPS ? "https" : "http"
         let port = Int(serverPort) != (webdavUseHTTPS ? 443 : 80) ? ":\(serverPort)" : ""
-        return "\(scheme)://\(serverHost)\(port)\(webdavURL)"
+        
+        // Ensure webdavURL starts with /
+        let cleanWebdavURL = webdavURL.hasPrefix("/") ? webdavURL : "/\(webdavURL)"
+        
+        return "\(scheme)://\(serverHost)\(port)\(cleanWebdavURL)"
     }
     
-    // Update the generateRcloneConfigPreview method to show obscured password
+    // Add this new method to show the full URL with backup path
+    private func constructFullURLWithPath() -> String {
+        let baseURL = constructFullURL()
+        let cleanPath = webdavPath.hasPrefix("/") ? webdavPath : "/\(webdavPath)"
+        return baseURL + cleanPath
+    }
+    
+    // Update the generateRcloneConfigPreview method
     private func generateRcloneConfigPreview() -> String {
+        let sslVerify = webdavVerifySSL && webdavUseHTTPS ? "" : "\ninsecure_skip_verify = true"
+        
         return """
         [\(remoteName)]
         type = webdav
         url = \(constructFullURL())
         vendor = nextcloud
         user = \(webdavUsername)
-        pass = \(webdavPassword.isEmpty ? "<password will be obscured>" : "<password obscured>")
-        \(webdavVerifySSL && webdavUseHTTPS ? "" : "insecure_skip_verify = true")
+        pass = \(webdavPassword.isEmpty ? "<password will be obscured>" : "<password obscured>")\(sslVerify)
         """
     }
     
@@ -456,7 +486,7 @@ struct PreferencesView: View {
         }
     }
 
-    // New helper method for testing WebDAV with settings object
+    // Update the testWebDAVWithSettings method to use the correct URL
     private func testWebDAVWithSettings(_ settings: BackupSettings) async -> Bool {
         guard let plainPassword = await settings.getPlainPassword() else {
             return false
@@ -478,6 +508,7 @@ struct PreferencesView: View {
                 arguments.append("-k")
             }
             
+            // Use the base WebDAV URL for connection testing
             arguments.append(settings.fullWebDAVURL)
             task.arguments = arguments
             
