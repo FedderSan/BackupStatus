@@ -7,9 +7,12 @@ struct PreferencesView: View {
     @State private var settings: BackupSettings?
     
     // Form fields
+    @State private var remoteType: RemoteType = .local
+    @State private var backupInterval = 1
+    
+    // WebDAV fields
     @State private var serverHost = ""
     @State private var serverPort = ""
-    @State private var backupInterval = 1
     @State private var webdavURL = ""
     @State private var webdavUsername = ""
     @State private var webdavPassword = ""
@@ -17,6 +20,10 @@ struct PreferencesView: View {
     @State private var webdavUseHTTPS = false
     @State private var webdavVerifySSL = true
     @State private var remoteName = ""
+    
+    // Local fields
+    @State private var localDestinationPath = ""
+    @State private var localCreateDatedFolders = true
     
     @State private var showingPassword = false
     @State private var testResult = ""
@@ -42,26 +49,50 @@ struct PreferencesView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     
-                    // Server Settings
-                    GroupBox("Server") {
+                    // Remote Type Selection
+                    GroupBox("Backup Method") {
                         VStack(spacing: 12) {
-                            HStack {
-                                Text("Host:")
-                                    .frame(width: 80, alignment: .trailing)
-                                TextField("Server host", text: $serverHost)
+                            // Use a more explicit picker style
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Select backup destination:")
+                                    .font(.headline)
+                                
+                                ForEach(RemoteType.allCases, id: \.self) { type in
+                                    Button(action: {
+                                        remoteType = type
+                                        testResult = "" // Clear test results when changing type
+                                    }) {
+                                        HStack {
+                                            Image(systemName: type.icon)
+                                                .frame(width: 20)
+                                            Text(type.displayName)
+                                            Spacer()
+                                            if remoteType == type {
+                                                Image(systemName: "checkmark.circle.fill")
+                                                    .foregroundColor(.blue)
+                                            }
+                                        }
+                                        .padding(.vertical, 8)
+                                        .padding(.horizontal, 12)
+                                        .background(remoteType == type ? Color.blue.opacity(0.1) : Color.clear)
+                                        .cornerRadius(8)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
                             
+                            Divider()
+                            
                             HStack {
-                                Text("Port:")
-                                    .frame(width: 80, alignment: .trailing)
-                                TextField("Port", text: $serverPort)
-                                    .frame(width: 80)
-                                Spacer()
+                                Text("Remote Name:")
+                                    .frame(width: 100, alignment: .trailing)
+                                TextField("Remote identifier", text: $remoteName)
+                                    .help("Unique name for this backup configuration")
                             }
                             
                             HStack {
                                 Text("Backup every:")
-                                    .frame(width: 80, alignment: .trailing)
+                                    .frame(width: 100, alignment: .trailing)
                                 TextField("Hours", value: $backupInterval, format: .number)
                                     .frame(width: 60)
                                 Text("hours")
@@ -71,75 +102,171 @@ struct PreferencesView: View {
                         .padding()
                     }
                     
-                    // WebDAV Settings
-                    GroupBox("WebDAV Configuration") {
-                        VStack(spacing: 12) {
-                            HStack {
-                                Text("Remote Name:")
-                                    .frame(width: 100, alignment: .trailing)
-                                TextField("Remote name", text: $remoteName)
-                            }
-                            
-                            HStack {
-                                Text("WebDAV Path:")
-                                    .frame(width: 100, alignment: .trailing)
-                                TextField("Server path", text: $webdavURL)
-                            }
-                            
-                            HStack {
-                                Text("Username:")
-                                    .frame(width: 100, alignment: .trailing)
-                                TextField("Username", text: $webdavUsername)
-                            }
-                            
-                            HStack {
-                                Text("Password:")
-                                    .frame(width: 100, alignment: .trailing)
+                    // Local Configuration
+                    if remoteType == .local {
+                        GroupBox("Local/Network Drive Configuration") {
+                            VStack(spacing: 12) {
                                 HStack {
-                                    if showingPassword {
-                                        TextField("Password", text: $webdavPassword)
-                                    } else {
-                                        SecureField("Password", text: $webdavPassword)
+                                    Text("Destination Path:")
+                                        .frame(width: 120, alignment: .trailing)
+                                    TextField("/Users/df/filen", text: $localDestinationPath)
+                                    Button("Choose...") {
+                                        chooseLocalPath()
                                     }
-                                    Button(action: { showingPassword.toggle() }) {
-                                        Image(systemName: showingPassword ? "eye.slash" : "eye")
+                                }
+                                
+                                HStack {
+                                    Toggle("Create dated folders", isOn: $localCreateDatedFolders)
+                                        .help("Creates daily and version subdirectories with timestamps")
+                                    Spacer()
+                                }
+                                
+                                if !localDestinationPath.isEmpty {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Backup structure:")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        Text("Daily: \(localDestinationPath)/daily/\(DateFormatter.dailyFormat.string(from: Date()))")
+                                            .font(.system(.caption, design: .monospaced))
+                                        Text("Versions: \(localDestinationPath)/versions/\(DateFormatter.versionFormat.string(from: Date()))")
+                                            .font(.system(.caption, design: .monospaced))
                                     }
-                                    .buttonStyle(.plain)
+                                    .padding(8)
+                                    .background(Color.blue.opacity(0.1))
+                                    .cornerRadius(4)
                                 }
                             }
-                            
-                            HStack {
-                                Text("Backup Path:")
-                                    .frame(width: 100, alignment: .trailing)
-                                TextField("Backup folder", text: $webdavPath)
-                            }
-                            
-                            HStack {
-                                Toggle("Use HTTPS", isOn: $webdavUseHTTPS)
-                                Spacer()
-                                Toggle("Verify SSL", isOn: $webdavVerifySSL)
-                                    .disabled(!webdavUseHTTPS)
-                            }
+                            .padding()
                         }
-                        .padding()
                     }
                     
-                    // URL Preview
+                    // WebDAV Configuration
+                    if remoteType == .webdav {
+                        GroupBox("Server Configuration") {
+                            VStack(spacing: 12) {
+                                HStack {
+                                    Text("Host:")
+                                        .frame(width: 80, alignment: .trailing)
+                                    TextField("Server host", text: $serverHost)
+                                }
+                                
+                                HStack {
+                                    Text("Port:")
+                                        .frame(width: 80, alignment: .trailing)
+                                    TextField("Port", text: $serverPort)
+                                        .frame(width: 80)
+                                    Spacer()
+                                }
+                            }
+                            .padding()
+                        }
+                        
+                        GroupBox("WebDAV Configuration") {
+                            VStack(spacing: 12) {
+                                HStack {
+                                    Text("WebDAV Path:")
+                                        .frame(width: 100, alignment: .trailing)
+                                    TextField("Server path", text: $webdavURL)
+                                        .help("e.g., /remote.php/dav/files/username")
+                                }
+                                
+                                HStack {
+                                    Text("Username:")
+                                        .frame(width: 100, alignment: .trailing)
+                                    TextField("Username", text: $webdavUsername)
+                                }
+                                
+                                HStack {
+                                    Text("Password:")
+                                        .frame(width: 100, alignment: .trailing)
+                                    HStack {
+                                        if showingPassword {
+                                            TextField("Password", text: $webdavPassword)
+                                        } else {
+                                            SecureField("Password", text: $webdavPassword)
+                                        }
+                                        Button(action: { showingPassword.toggle() }) {
+                                            Image(systemName: showingPassword ? "eye.slash" : "eye")
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                
+                                HStack {
+                                    Text("Backup Path:")
+                                        .frame(width: 100, alignment: .trailing)
+                                    TextField("Backup folder", text: $webdavPath)
+                                        .help("Remote folder for backups, e.g., /BackupFolderLaptop")
+                                }
+                                
+                                HStack {
+                                    Toggle("Use HTTPS", isOn: $webdavUseHTTPS)
+                                    Spacer()
+                                    Toggle("Verify SSL", isOn: $webdavVerifySSL)
+                                        .disabled(!webdavUseHTTPS)
+                                }
+                            }
+                            .padding()
+                        }
+                    }
+                    
+                    // Not Implemented Configuration
+                    if remoteType != .local && remoteType != .webdav {
+                        GroupBox("\(remoteType.displayName) Configuration") {
+                            VStack {
+                                Image(systemName: "wrench.and.screwdriver")
+                                    .font(.largeTitle)
+                                    .foregroundColor(.secondary)
+                                Text("Configuration for \(remoteType.displayName) is not yet implemented")
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .padding()
+                        }
+                    }
+                    
+                    // Preview Section
                     GroupBox("Preview") {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Base URL: \(constructBaseURL())")
-                                .font(.system(.caption, design: .monospaced))
-                                .textSelection(.enabled)
-                                .padding(8)
-                                .background(Color.blue.opacity(0.1))
-                                .cornerRadius(4)
-                            
-                            Text("Full URL: \(constructFullURL())")
-                                .font(.system(.caption, design: .monospaced))
-                                .textSelection(.enabled)
-                                .padding(8)
-                                .background(Color.green.opacity(0.1))
-                                .cornerRadius(4)
+                            switch remoteType {
+                            case .local:
+                                if !localDestinationPath.isEmpty {
+                                    Text("Backup destination: \(localDestinationPath)")
+                                        .font(.system(.caption, design: .monospaced))
+                                        .textSelection(.enabled)
+                                        .padding(8)
+                                        .background(Color.blue.opacity(0.1))
+                                        .cornerRadius(4)
+                                } else {
+                                    Text("Please select a destination path")
+                                        .foregroundColor(.secondary)
+                                        .padding()
+                                }
+                            case .webdav:
+                                if !serverHost.isEmpty && !webdavURL.isEmpty {
+                                    Text("Base URL: \(constructBaseURL())")
+                                        .font(.system(.caption, design: .monospaced))
+                                        .textSelection(.enabled)
+                                        .padding(8)
+                                        .background(Color.blue.opacity(0.1))
+                                        .cornerRadius(4)
+                                    
+                                    Text("Full URL: \(constructFullURL())")
+                                        .font(.system(.caption, design: .monospaced))
+                                        .textSelection(.enabled)
+                                        .padding(8)
+                                        .background(Color.green.opacity(0.1))
+                                        .cornerRadius(4)
+                                } else {
+                                    Text("Please configure server settings")
+                                        .foregroundColor(.secondary)
+                                        .padding()
+                                }
+                            default:
+                                Text("Preview not available")
+                                    .foregroundColor(.secondary)
+                                    .padding()
+                            }
                         }
                         .padding()
                     }
@@ -150,6 +277,24 @@ struct PreferencesView: View {
                             Text(testResult)
                                 .foregroundColor(testResult.contains("✅") ? .green : .red)
                                 .padding()
+                        }
+                    }
+                    
+                    // Validation errors
+                    let validation = validateCurrentSettings()
+                    if !validation.isValid {
+                        GroupBox("Configuration Issues") {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(validation.errors, id: \.self) { error in
+                                    HStack {
+                                        Image(systemName: "exclamationmark.triangle")
+                                            .foregroundColor(.orange)
+                                        Text(error)
+                                            .foregroundColor(.orange)
+                                    }
+                                }
+                            }
+                            .padding()
                         }
                     }
                 }
@@ -170,13 +315,27 @@ struct PreferencesView: View {
             }
             .padding()
         }
-        .frame(width: 500, height: 600)
+        .frame(minWidth: 700, idealWidth: 800, maxWidth: 1200, minHeight: 600, idealHeight: 700, maxHeight: 1000)
         .onAppear {
             loadSettings()
         }
     }
     
     // MARK: - Helper Methods
+    
+    private func chooseLocalPath() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose backup destination folder"
+        
+        if panel.runModal() == .OK {
+            if let url = panel.url {
+                localDestinationPath = url.path
+            }
+        }
+    }
     
     private func constructBaseURL() -> String {
         let scheme = webdavUseHTTPS ? "https" : "http"
@@ -191,17 +350,48 @@ struct PreferencesView: View {
         return baseURL + cleanPath
     }
     
+    private func validateCurrentSettings() -> (isValid: Bool, errors: [String]) {
+        var errors: [String] = []
+        
+        if remoteName.isEmpty {
+            errors.append("Remote name is required")
+        }
+        
+        switch remoteType {
+        case .local:
+            if localDestinationPath.isEmpty {
+                errors.append("Local destination path is required")
+            }
+        case .webdav:
+            if serverHost.isEmpty {
+                errors.append("Server host is required")
+            }
+            if webdavUsername.isEmpty {
+                errors.append("WebDAV username is required")
+            }
+            if webdavPassword.isEmpty {
+                errors.append("WebDAV password is required")
+            }
+        default:
+            errors.append("\(remoteType.displayName) is not yet implemented")
+        }
+        
+        return (errors.isEmpty, errors)
+    }
+    
     private func loadSettings() {
         let descriptor = FetchDescriptor<BackupSettings>()
         if let existingSettings = try? modelContext.fetch(descriptor).first {
             settings = existingSettings
             populateFields(from: existingSettings)
             
-            // Load password asynchronously
-            Task {
-                if let plainPassword = await existingSettings.getPlainPassword() {
-                    await MainActor.run {
-                        webdavPassword = plainPassword
+            // Load password asynchronously for WebDAV
+            if existingSettings.remoteType == .webdav {
+                Task {
+                    if let plainPassword = await existingSettings.getPlainPassword() {
+                        await MainActor.run {
+                            webdavPassword = plainPassword
+                        }
                     }
                 }
             }
@@ -215,15 +405,22 @@ struct PreferencesView: View {
     }
     
     private func populateFields(from settings: BackupSettings) {
+        remoteType = settings.remoteType
+        backupInterval = settings.backupIntervalHours
+        remoteName = settings.remoteName
+        
+        // WebDAV fields
         serverHost = settings.serverHost
         serverPort = String(settings.serverPort)
-        backupInterval = settings.backupIntervalHours
         webdavURL = settings.webdavURL
         webdavUsername = settings.webdavUsername
         webdavPath = settings.webdavPath
         webdavUseHTTPS = settings.webdavUseHTTPS
         webdavVerifySSL = settings.webdavVerifySSL
-        remoteName = settings.remoteName
+        
+        // Local fields
+        localDestinationPath = settings.localDestinationPath
+        localCreateDatedFolders = settings.localCreateDatedFolders
     }
     
     private func resetToDefaults() {
@@ -236,22 +433,35 @@ struct PreferencesView: View {
     private func saveSettings() {
         guard let settings = settings else { return }
         
+        let validation = validateCurrentSettings()
+        guard validation.isValid else {
+            testResult = "❌ Please fix configuration issues before saving"
+            return
+        }
+        
         testResult = "Saving..."
         
         Task {
-            // Update settings
+            // Update basic settings
+            settings.remoteType = remoteType
+            settings.backupIntervalHours = backupInterval
+            settings.remoteName = remoteName
+            
+            // Update WebDAV settings
             settings.serverHost = serverHost
             settings.serverPort = Int(serverPort) ?? 8081
-            settings.backupIntervalHours = backupInterval
             settings.webdavURL = webdavURL
             settings.webdavUsername = webdavUsername
             settings.webdavPath = webdavPath
             settings.webdavUseHTTPS = webdavUseHTTPS
             settings.webdavVerifySSL = webdavVerifySSL
-            settings.remoteName = remoteName
             
-            // Save password
-            if !webdavPassword.isEmpty {
+            // Update local settings
+            settings.localDestinationPath = localDestinationPath
+            settings.localCreateDatedFolders = localCreateDatedFolders
+            
+            // Save password for WebDAV
+            if remoteType == .webdav && !webdavPassword.isEmpty {
                 await settings.setPassword(webdavPassword)
             }
             
@@ -269,11 +479,32 @@ struct PreferencesView: View {
     }
     
     private func testConnection() {
+        let validation = validateCurrentSettings()
+        guard validation.isValid else {
+            testResult = "❌ Please fix configuration issues before testing"
+            return
+        }
+        
         isTestingConnection = true
         testResult = "Testing connection..."
         
         Task {
-            let success = await performConnectionTest()
+            let success: Bool
+            
+            switch remoteType {
+            case .local:
+                success = await testLocalConnection()
+            case .webdav:
+                success = await testWebDAVConnection()
+            default:
+                success = false
+                await MainActor.run {
+                    testResult = "❌ Connection test not implemented for \(remoteType.displayName)"
+                }
+                isTestingConnection = false
+                return
+            }
+            
             await MainActor.run {
                 testResult = success ? "✅ Connection successful" : "❌ Connection failed"
                 isTestingConnection = false
@@ -281,7 +512,49 @@ struct PreferencesView: View {
         }
     }
     
-    private func performConnectionTest() async -> Bool {
+    private func testLocalConnection() async -> Bool {
+        let fileManager = FileManager.default
+        
+        // Test if destination path exists and is writable
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: localDestinationPath, isDirectory: &isDirectory) else {
+            await MainActor.run {
+                testResult = "❌ Path does not exist: \(localDestinationPath)"
+            }
+            return false
+        }
+        
+        guard isDirectory.boolValue else {
+            await MainActor.run {
+                testResult = "❌ Path is not a directory"
+            }
+            return false
+        }
+        
+        guard fileManager.isWritableFile(atPath: localDestinationPath) else {
+            await MainActor.run {
+                testResult = "❌ Path is not writable"
+            }
+            return false
+        }
+        
+        // Test creating a temporary file
+        let testFileName = UUID().uuidString
+        let testFilePath = "\(localDestinationPath)/.\(testFileName).test"
+        
+        do {
+            try "test".write(toFile: testFilePath, atomically: true, encoding: .utf8)
+            try fileManager.removeItem(atPath: testFilePath)
+            return true
+        } catch {
+            await MainActor.run {
+                testResult = "❌ Cannot write to path: \(error.localizedDescription)"
+            }
+            return false
+        }
+    }
+    
+    private func testWebDAVConnection() async -> Bool {
         return await withCheckedContinuation { continuation in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
@@ -301,11 +574,26 @@ struct PreferencesView: View {
             arguments.append(constructBaseURL())
             task.arguments = arguments
             
+            let errorPipe = Pipe()
+            task.standardError = errorPipe
+            
             do {
                 try task.run()
                 task.waitUntilExit()
+                
+                if task.terminationStatus != 0 {
+                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                    Task { @MainActor in
+                        testResult = "❌ WebDAV test failed: \(errorOutput)"
+                    }
+                }
+                
                 continuation.resume(returning: task.terminationStatus == 0)
             } catch {
+                Task { @MainActor in
+                    testResult = "❌ Connection test error: \(error.localizedDescription)"
+                }
                 continuation.resume(returning: false)
             }
         }

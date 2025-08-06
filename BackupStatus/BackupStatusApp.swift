@@ -56,12 +56,14 @@ struct BackupStatusApp: App {
                 .modelContainer(modelContainer)
         }
         .windowResizability(.contentSize)
+        .defaultSize(width: 800, height: 500)
         
         Window("Settings", id: "settings") {
             PreferencesView()
                 .modelContainer(modelContainer)
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 800, height: 700)
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
         

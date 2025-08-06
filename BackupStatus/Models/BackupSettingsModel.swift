@@ -18,6 +18,10 @@ class BackupSettings {
     var webdavUseHTTPS: Bool
     var webdavVerifySSL: Bool
     
+    // Local/Network Drive Configuration
+    var localDestinationPath: String  // e.g., "/Users/df/filen/backups"
+    var localCreateDatedFolders: Bool  // Whether to create dated subfolders
+    
     // Remote Configuration
     var remoteName: String
     var remoteType: RemoteType
@@ -37,9 +41,13 @@ class BackupSettings {
         self.webdavUseHTTPS = false
         self.webdavVerifySSL = true
         
+        // Local defaults
+        self.localDestinationPath = "/Users/df/filen"
+        self.localCreateDatedFolders = true
+        
         // Remote defaults
-        self.remoteName = "nextcloud-backup"
-        self.remoteType = .webdav
+        self.remoteName = "backup-remote"
+        self.remoteType = .local  // Default to local now
     }
     
     // MARK: - Password Management
@@ -74,9 +82,55 @@ class BackupSettings {
         return baseURL + cleanPath
     }
     
+    // MARK: - Local Path Construction
+    
+    var fullLocalDestinationPath: String {
+        switch remoteType {
+        case .local:
+            return localDestinationPath.hasSuffix("/") ?
+                String(localDestinationPath.dropLast()) :
+                localDestinationPath
+        default:
+            return localDestinationPath
+        }
+    }
+    
+    func localBackupPath(for date: Date = Date()) -> String {
+        let basePath = fullLocalDestinationPath
+        
+        if localCreateDatedFolders {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd"
+            let dateString = dateFormatter.string(from: date)
+            return "\(basePath)/daily/\(dateString)"
+        } else {
+            return "\(basePath)/current"
+        }
+    }
+    
+    func localVersionPath(for date: Date = Date()) -> String {
+        let basePath = fullLocalDestinationPath
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let dateString = dateFormatter.string(from: date)
+        return "\(basePath)/versions/\(dateString)"
+    }
+    
     // MARK: - rclone Configuration
     
     func generateRcloneConfig() -> String {
+        switch remoteType {
+        case .webdav:
+            return generateWebDAVConfig()
+        case .local:
+            return generateLocalConfig()
+        case .s3, .sftp, .ftp:
+            // Placeholder for future implementations
+            return generatePlaceholderConfig()
+        }
+    }
+    
+    private func generateWebDAVConfig() -> String {
         var config = """
         [\(remoteName)]
         type = webdav
@@ -91,5 +145,68 @@ class BackupSettings {
         }
         
         return config
+    }
+    
+    private func generateLocalConfig() -> String {
+        return """
+        [\(remoteName)]
+        type = local
+        """
+    }
+    
+    private func generatePlaceholderConfig() -> String {
+        return """
+        [\(remoteName)]
+        type = \(remoteType.rawValue)
+        # Configuration for \(remoteType.displayName) not yet implemented
+        """
+    }
+    
+    // MARK: - Validation
+    
+    func validateConfiguration() -> (isValid: Bool, errors: [String]) {
+        var errors: [String] = []
+        
+        switch remoteType {
+        case .local:
+            if localDestinationPath.isEmpty {
+                errors.append("Local destination path is required")
+            }
+            
+            // Check if path exists and is writable
+            let fileManager = FileManager.default
+            var isDirectory: ObjCBool = false
+            
+            if !fileManager.fileExists(atPath: localDestinationPath, isDirectory: &isDirectory) {
+                errors.append("Local destination path does not exist")
+            } else if !isDirectory.boolValue {
+                errors.append("Local destination path is not a directory")
+            } else {
+                // Check if writable
+                if !fileManager.isWritableFile(atPath: localDestinationPath) {
+                    errors.append("Local destination path is not writable")
+                }
+            }
+            
+        case .webdav:
+            if serverHost.isEmpty {
+                errors.append("Server host is required for WebDAV")
+            }
+            if webdavUsername.isEmpty {
+                errors.append("WebDAV username is required")
+            }
+            if webdavPasswordObscured.isEmpty {
+                errors.append("WebDAV password is required")
+            }
+            
+        default:
+            errors.append("\(remoteType.displayName) is not yet implemented")
+        }
+        
+        if remoteName.isEmpty {
+            errors.append("Remote name is required")
+        }
+        
+        return (errors.isEmpty, errors)
     }
 }

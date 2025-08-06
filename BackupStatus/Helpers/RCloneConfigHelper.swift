@@ -9,6 +9,8 @@ class RcloneConfigHelper {
         switch settings.remoteType {
         case .webdav:
             return generateWebDAVConfig(with: settings)
+        case .local:
+            return generateLocalConfig(with: settings)
         case .s3:
             return generateS3Config(with: settings)
         case .sftp:
@@ -16,6 +18,13 @@ class RcloneConfigHelper {
         case .ftp:
             return generateFTPConfig(with: settings)
         }
+    }
+    
+    private func generateLocalConfig(with settings: BackupSettings) -> String {
+        return """
+        [\(settings.remoteName)]
+        type = local
+        """
     }
     
     private func generateWebDAVConfig(with settings: BackupSettings) -> String {
