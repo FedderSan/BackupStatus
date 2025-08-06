@@ -1,19 +1,6 @@
-//
-//  ConnectionDebugHelper.swift
-//  BackupStatus
-//
-//  Created by Daniel Feddersen on 06/08/2025.
-//
-
-//
-//  ConnectionDebugHelper.swift
-//  BackupStatus
-//
-//  Helper for debugging connection issues
-//
-
 import Foundation
 
+@MainActor
 class ConnectionDebugHelper {
     static let shared = ConnectionDebugHelper()
     
@@ -61,15 +48,19 @@ class ConnectionDebugHelper {
                 let success = task.terminationStatus == 0
                 let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
                 
-                if success {
-                    logManager.log("✅ Network connectivity OK", level: .debug)
-                } else {
-                    logManager.log("❌ Network connectivity failed: \(output)", level: .error)
+                Task { @MainActor in
+                    if success {
+                        logManager.log("✅ Network connectivity OK", level: .debug)
+                    } else {
+                        logManager.log("❌ Network connectivity failed: \(output)", level: .error)
+                    }
                 }
                 
                 continuation.resume(returning: success)
             } catch {
-                logManager.log("❌ Network test error: \(error)", level: .error)
+                Task { @MainActor in
+                    logManager.log("❌ Network test error: \(error)", level: .error)
+                }
                 continuation.resume(returning: false)
             }
         }
@@ -80,12 +71,16 @@ class ConnectionDebugHelper {
         let baseURL = settings.fullWebDAVURL
         let fullURL = settings.fullWebDAVURLWithPath
         
-        logManager.log("🔗 Testing WebDAV URLs:", level: .debug)
-        logManager.log("  Base URL: \(baseURL)", level: .debug)
-        logManager.log("  Full URL: \(fullURL)", level: .debug)
+        await MainActor.run {
+            logManager.log("🔗 Testing WebDAV URLs:", level: .debug)
+            logManager.log("  Base URL: \(baseURL)", level: .debug)
+            logManager.log("  Full URL: \(fullURL)", level: .debug)
+        }
         
         guard let plainPassword = await settings.getPlainPassword() else {
-            logManager.log("❌ Failed to retrieve plain password", level: .error)
+            await MainActor.run {
+                logManager.log("❌ Failed to retrieve plain password", level: .error)
+            }
             return false
         }
         
@@ -93,24 +88,30 @@ class ConnectionDebugHelper {
         let baseTest = await testWebDAVURL(baseURL, username: settings.webdavUsername, password: plainPassword, verifySSL: settings.webdavVerifySSL, logManager: logManager)
         
         if !baseTest {
-            logManager.log("❌ Base WebDAV URL test failed", level: .error)
+            await MainActor.run {
+                logManager.log("❌ Base WebDAV URL test failed", level: .error)
+            }
             return false
         }
         
         // Test full URL with path
         let pathTest = await testWebDAVURL(fullURL, username: settings.webdavUsername, password: plainPassword, verifySSL: settings.webdavVerifySSL, logManager: logManager)
         
-        if pathTest {
-            logManager.log("✅ Both WebDAV URLs accessible", level: .debug)
-        } else {
-            logManager.log("⚠️ Base URL OK, but backup path may not exist", level: .warning)
+        await MainActor.run {
+            if pathTest {
+                logManager.log("✅ Both WebDAV URLs accessible", level: .debug)
+            } else {
+                logManager.log("⚠️ Base URL OK, but backup path may not exist", level: .warning)
+            }
         }
         
         return baseTest // Return true if base URL works, even if path doesn't exist
     }
     
     private func testWebDAVURL(_ url: String, username: String, password: String, verifySSL: Bool, logManager: LogManager) async -> Bool {
-        logManager.log("🔍 Testing WebDAV URL: \(url)", level: .debug)
+        await MainActor.run {
+            logManager.log("🔍 Testing WebDAV URL: \(url)", level: .debug)
+        }
         
         return await withCheckedContinuation { continuation in
             let task = Process()
@@ -143,50 +144,66 @@ class ConnectionDebugHelper {
                 let success = task.terminationStatus == 0
                 let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
                 
-                // Log detailed curl output for debugging
-                if !success {
-                    logManager.log("❌ Curl output: \(output)", level: .error)
-                } else {
-                    logManager.log("✅ WebDAV PROPFIND successful", level: .debug)
+                Task { @MainActor in
+                    if !success {
+                        logManager.log("❌ Curl output: \(output)", level: .error)
+                    } else {
+                        logManager.log("✅ WebDAV PROPFIND successful", level: .debug)
+                    }
                 }
                 
                 continuation.resume(returning: success)
             } catch {
-                logManager.log("❌ Curl execution error: \(error)", level: .error)
+                Task { @MainActor in
+                    logManager.log("❌ Curl execution error: \(error)", level: .error)
+                }
                 continuation.resume(returning: false)
             }
         }
     }
     
     private func testRcloneConfig(settings: BackupSettings, logManager: LogManager) async -> Bool {
-        logManager.log("⚙️ Testing rclone config generation", level: .debug)
+        await MainActor.run {
+            logManager.log("⚙️ Testing rclone config generation", level: .debug)
+        }
         
         let configContent = settings.generateRcloneConfig()
-        logManager.log("Generated config:\n\(configContent)", level: .debug)
+        
+        await MainActor.run {
+            logManager.log("Generated config:\n\(configContent)", level: .debug)
+        }
         
         // Verify password is obscured
         if settings.webdavPasswordObscured.isEmpty {
-            logManager.log("❌ Password is not obscured", level: .error)
+            await MainActor.run {
+                logManager.log("❌ Password is not obscured", level: .error)
+            }
             return false
         }
         
         // Try to write config
         do {
-            let configPath = settings.rcloneConfigPath
+            let configPath = "/Users/danielfeddersen/.config/rclone/rclone.conf"
             let configDir = URL(fileURLWithPath: configPath).deletingLastPathComponent()
             try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
             try configContent.write(toFile: configPath, atomically: true, encoding: .utf8)
             
-            logManager.log("✅ rclone config written successfully", level: .debug)
+            await MainActor.run {
+                logManager.log("✅ rclone config written successfully", level: .debug)
+            }
             return true
         } catch {
-            logManager.log("❌ Failed to write rclone config: \(error)", level: .error)
+            await MainActor.run {
+                logManager.log("❌ Failed to write rclone config: \(error)", level: .error)
+            }
             return false
         }
     }
     
     private func testRcloneConnection(settings: BackupSettings, logManager: LogManager) async -> Bool {
-        logManager.log("🚀 Testing rclone connection", level: .debug)
+        await MainActor.run {
+            logManager.log("🚀 Testing rclone connection", level: .debug)
+        }
         
         return await withCheckedContinuation { continuation in
             let task = Process()
@@ -194,7 +211,7 @@ class ConnectionDebugHelper {
             task.arguments = ["lsd", "\(settings.remoteName):", "--timeout", "30s", "-v"]
             
             var environment = ProcessInfo.processInfo.environment
-            environment["RCLONE_CONFIG"] = settings.rcloneConfigPath
+            environment["RCLONE_CONFIG"] = "/Users/danielfeddersen/.config/rclone/rclone.conf"
             task.environment = environment
             
             let pipe = Pipe()
@@ -208,16 +225,20 @@ class ConnectionDebugHelper {
                 let success = task.terminationStatus == 0
                 let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
                 
-                if success {
-                    logManager.log("✅ rclone connection successful", level: .debug)
-                    logManager.log("rclone output: \(output)", level: .debug)
-                } else {
-                    logManager.log("❌ rclone connection failed: \(output)", level: .error)
+                Task { @MainActor in
+                    if success {
+                        logManager.log("✅ rclone connection successful", level: .debug)
+                        logManager.log("rclone output: \(output)", level: .debug)
+                    } else {
+                        logManager.log("❌ rclone connection failed: \(output)", level: .error)
+                    }
                 }
                 
                 continuation.resume(returning: success)
             } catch {
-                logManager.log("❌ rclone execution error: \(error)", level: .error)
+                Task { @MainActor in
+                    logManager.log("❌ rclone execution error: \(error)", level: .error)
+                }
                 continuation.resume(returning: false)
             }
         }

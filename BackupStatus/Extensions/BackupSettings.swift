@@ -8,9 +8,6 @@
 // MARK: - BackupSettings Extension
 
 extension BackupSettings {
-    func generateRcloneConfig() -> String {
-        return RcloneConfigHelper.shared.generateRemoteConfig(with: self)
-    }
     
     func updateRcloneConfig() throws {
         try RcloneConfigHelper.shared.updateConfiguration(with: self)

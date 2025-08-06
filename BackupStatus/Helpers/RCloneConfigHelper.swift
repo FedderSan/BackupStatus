@@ -1,10 +1,3 @@
-//
-//  RcloneConfigHelper.swift
-//  BackupStatus
-//
-//  Helper for managing rclone configuration files
-//
-
 import Foundation
 
 class RcloneConfigHelper {
@@ -32,7 +25,7 @@ class RcloneConfigHelper {
         url = \(settings.fullWebDAVURL)
         vendor = nextcloud
         user = \(settings.webdavUsername)
-        pass = \(settings.obscuredPassword)
+        pass = \(settings.webdavPasswordObscured)
         """
         
         // Add SSL verification setting if needed
@@ -71,7 +64,7 @@ class RcloneConfigHelper {
     }
     
     func updateConfiguration(with settings: BackupSettings) throws {
-        let configPath = settings.rcloneConfigPath
+        let configPath = "/Users/danielfeddersen/.config/rclone/rclone.conf"
         let configContent = generateRemoteConfig(with: settings)
         
         // Ensure the config directory exists
@@ -95,7 +88,6 @@ class RcloneConfigHelper {
     private func updateExistingConfig(_ existingContent: String, with newConfig: String, remoteName: String) -> String {
         let lines = existingContent.components(separatedBy: .newlines)
         var updatedLines: [String] = []
-        var inTargetSection = false
         var skipUntilNextSection = false
         
         for line in lines {
@@ -107,12 +99,10 @@ class RcloneConfigHelper {
                 
                 if sectionName == remoteName {
                     // We found our target section, skip it entirely
-                    inTargetSection = true
                     skipUntilNextSection = true
                     continue
                 } else {
                     // Different section, stop skipping
-                    inTargetSection = false
                     skipUntilNextSection = false
                 }
             }
