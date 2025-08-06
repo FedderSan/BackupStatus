@@ -40,7 +40,7 @@ class BackupSettings {
         
         // WebDAV defaults
         self.webdavEnabled = true
-        // Changed: Only store the path part, not the full URL
+        // Store only the path part, not the full URL
         self.webdavURL = "/remote.php/dav/files/daniel"
         self.webdavUsername = "danielfeddersen@gmail.com"
         self.webdavPasswordObscured = "" // Will be set when password is provided
@@ -104,17 +104,21 @@ class BackupSettings {
     // MARK: - rclone Configuration Generation
     
     func generateRcloneConfig() -> String {
-        let sslVerify = webdavVerifySSL && webdavUseHTTPS ? "" : "\ninsecure_skip_verify = true"
-        
-        return """
+        var config = """
         [\(remoteName)]
         type = webdav
         url = \(fullWebDAVURL)
-        vendor = nextcloud	
+        vendor = nextcloud
         user = \(webdavUsername)
         pass = \(webdavPasswordObscured)
-        bearer_token_command = \(sslVerify)
         """
+        
+        // Add SSL verification setting if needed
+        if !webdavVerifySSL || !webdavUseHTTPS {
+            config += "\ninsecure_skip_verify = true"
+        }
+        
+        return config
     }
     
     func updateRcloneConfig() throws {
@@ -130,5 +134,3 @@ class BackupSettings {
         print("Updated rclone configuration at \(configPath)")
     }
 }
-
-

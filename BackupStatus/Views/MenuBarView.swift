@@ -74,7 +74,27 @@ struct MenuBarView: View {
             Button("Settings") {
                 openWindow(id: "settings")
             }
-            
+#if DEBUG
+Divider()
+
+Button("🔍 Debug Connection") {
+    Task {
+        await backupManager.debugConnection()
+    }
+}
+
+Button("🔧 Debug rclone Config") {
+    Task {
+        await backupManager.debugRcloneConfig()
+    }
+}
+
+Button("🔐 Debug Password") {
+    Task {
+        await backupManager.debugPasswordHandling()
+    }
+}
+#endif
             Divider()
             
             Button("Quit") {

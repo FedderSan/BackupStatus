@@ -599,4 +599,59 @@ class BackupManager: ObservableObject {
     }
 }
 
+// MARK: - Add these debug methods to your BackupManager.swift
 
+extension BackupManager {
+    
+    /// Comprehensive debug test for connection issues
+    func debugConnection() async -> Bool {
+        guard let settings = await dataActor.getSettings() else {
+            logManager.log("❌ No settings found for debug", level: .error)
+            return false
+        }
+        
+        return await ConnectionDebugHelper.shared.debugConnection(with: settings, logManager: logManager)
+    }
+    
+    /// Test and log the current rclone configuration
+    func debugRcloneConfig() async {
+        guard let settings = await dataActor.getSettings() else {
+            logManager.log("❌ No settings found", level: .error)
+            return
+        }
+        
+        logManager.log("🔧 Current rclone configuration:", level: .info)
+        let config = settings.generateRcloneConfig()
+        logManager.log(config, level: .debug)
+        
+        // Test if rclone can read the config
+        let configPath = settings.rcloneConfigPath
+        if FileManager.default.fileExists(atPath: configPath) {
+            do {
+                let existingConfig = try String(contentsOfFile: configPath, encoding: .utf8)
+                logManager.log("📄 Existing config file:\n\(existingConfig)", level: .debug)
+            } catch {
+                logManager.log("❌ Failed to read existing config: \(error)", level: .error)
+            }
+        } else {
+            logManager.log("⚠️ Config file does not exist at: \(configPath)", level: .warning)
+        }
+    }
+    
+    /// Verify password obscuring/revealing works correctly
+    func debugPasswordHandling() async {
+        guard let settings = await dataActor.getSettings() else {
+            logManager.log("❌ No settings found", level: .error)
+            return
+        }
+        
+        logManager.log("🔐 Testing password handling:", level: .info)
+        logManager.log("Obscured password: \(settings.webdavPasswordObscured.isEmpty ? "EMPTY" : "SET")", level: .debug)
+        
+        if let plainPassword = await settings.getPlainPassword() {
+            logManager.log("✅ Password reveal successful (length: \(plainPassword.count))", level: .debug)
+        } else {
+            logManager.log("❌ Password reveal failed", level: .error)
+        }
+    }
+}
