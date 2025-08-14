@@ -10,6 +10,10 @@ struct PreferencesView: View {
     @State private var remoteType: RemoteType = .local
     @State private var backupInterval = 1
     
+    // Source fields (NEW)
+    @State private var sourcePath = ""
+    @State private var excludePatterns = ""
+    
     // WebDAV fields
     @State private var serverHost = ""
     @State private var serverPort = ""
@@ -48,6 +52,53 @@ struct PreferencesView: View {
             // Main form
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    
+                    // Source Configuration (NEW - placed first)
+                    GroupBox("Source Configuration") {
+                        VStack(spacing: 12) {
+                            HStack {
+                                Text("Source Path:")
+                                    .frame(width: 120, alignment: .trailing)
+                                TextField("/path/to/source", text: $sourcePath)
+                                Button("Choose...") {
+                                    chooseSourcePath()
+                                }
+                            }
+                            
+                            HStack(alignment: .top) {
+                                Text("Exclude Patterns:")
+                                    .frame(width: 120, alignment: .trailing)
+                                VStack(alignment: .leading) {
+                                    TextField("e.g., .DS_Store, *.tmp, *.cache", text: $excludePatterns)
+                                        .help("Comma-separated patterns to exclude from backup")
+                                    Text("Common patterns: .DS_Store, *.tmp, *.cache, node_modules, .git")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            
+                            if !sourcePath.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Image(systemName: sourcePathExists ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                            .foregroundColor(sourcePathExists ? .green : .red)
+                                        Text(sourcePathExists ? "Source path exists" : "Source path does not exist")
+                                            .font(.caption)
+                                    }
+                                    
+                                    if let sourceInfo = getSourceInfo() {
+                                        Text("Contains: \(sourceInfo.fileCount) files, \(ByteCountFormatter.string(fromByteCount: sourceInfo.totalSize, countStyle: .file))")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(8)
+                                .background(Color.blue.opacity(0.1))
+                                .cornerRadius(4)
+                            }
+                        }
+                        .padding()
+                    }
                     
                     // Remote Type Selection
                     GroupBox("Backup Method") {
@@ -109,7 +160,7 @@ struct PreferencesView: View {
                                 HStack {
                                     Text("Destination Path:")
                                         .frame(width: 120, alignment: .trailing)
-                                    TextField("/Users/df/filen", text: $localDestinationPath)
+                                    TextField("/path/to/destination", text: $localDestinationPath)
                                     Button("Choose...") {
                                         chooseLocalPath()
                                     }
@@ -133,6 +184,19 @@ struct PreferencesView: View {
                                     }
                                     .padding(8)
                                     .background(Color.blue.opacity(0.1))
+                                    .cornerRadius(4)
+                                }
+                                
+                                // Warning if source and destination are the same
+                                if !sourcePath.isEmpty && !localDestinationPath.isEmpty && sourcePath == localDestinationPath {
+                                    HStack {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundColor(.orange)
+                                        Text("Source and destination cannot be the same path")
+                                            .foregroundColor(.orange)
+                                    }
+                                    .padding(8)
+                                    .background(Color.orange.opacity(0.1))
                                     .cornerRadius(4)
                                 }
                             }
@@ -228,10 +292,20 @@ struct PreferencesView: View {
                     // Preview Section
                     GroupBox("Preview") {
                         VStack(alignment: .leading, spacing: 8) {
+                            // Always show source
+                            if !sourcePath.isEmpty {
+                                Text("Source: \(sourcePath)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .padding(8)
+                                    .background(Color.green.opacity(0.1))
+                                    .cornerRadius(4)
+                            }
+                            
                             switch remoteType {
                             case .local:
                                 if !localDestinationPath.isEmpty {
-                                    Text("Backup destination: \(localDestinationPath)")
+                                    Text("Destination: \(localDestinationPath)")
                                         .font(.system(.caption, design: .monospaced))
                                         .textSelection(.enabled)
                                         .padding(8)
@@ -255,7 +329,7 @@ struct PreferencesView: View {
                                         .font(.system(.caption, design: .monospaced))
                                         .textSelection(.enabled)
                                         .padding(8)
-                                        .background(Color.green.opacity(0.1))
+                                        .background(Color.blue.opacity(0.1))
                                         .cornerRadius(4)
                                 } else {
                                     Text("Please configure server settings")
@@ -323,6 +397,51 @@ struct PreferencesView: View {
     
     // MARK: - Helper Methods
     
+    private var sourcePathExists: Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: sourcePath, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+    
+    private func getSourceInfo() -> (fileCount: Int, totalSize: Int64)? {
+        guard sourcePathExists else { return nil }
+        
+        let fileManager = FileManager.default
+        var fileCount = 0
+        var totalSize: Int64 = 0
+        
+        guard let enumerator = fileManager.enumerator(atPath: sourcePath) else {
+            return nil
+        }
+        
+        while let file = enumerator.nextObject() as? String {
+            let fullPath = "\(sourcePath)/\(file)"
+            if let attributes = try? fileManager.attributesOfItem(atPath: fullPath),
+               let fileType = attributes[.type] as? FileAttributeType,
+               fileType == .typeRegular {
+                fileCount += 1
+                if let size = attributes[.size] as? Int64 {
+                    totalSize += size
+                }
+            }
+        }
+        
+        return (fileCount, totalSize)
+    }
+    
+    private func chooseSourcePath() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose source folder to backup"
+        
+        if panel.runModal() == .OK {
+            if let url = panel.url {
+                sourcePath = url.path
+            }
+        }
+    }
+    
     private func chooseLocalPath() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -353,6 +472,13 @@ struct PreferencesView: View {
     private func validateCurrentSettings() -> (isValid: Bool, errors: [String]) {
         var errors: [String] = []
         
+        // Source validation
+        if sourcePath.isEmpty {
+            errors.append("Source path is required")
+        } else if !sourcePathExists {
+            errors.append("Source path does not exist")
+        }
+        
         if remoteName.isEmpty {
             errors.append("Remote name is required")
         }
@@ -361,6 +487,9 @@ struct PreferencesView: View {
         case .local:
             if localDestinationPath.isEmpty {
                 errors.append("Local destination path is required")
+            }
+            if !sourcePath.isEmpty && !localDestinationPath.isEmpty && sourcePath == localDestinationPath {
+                errors.append("Source and destination paths cannot be the same")
             }
         case .webdav:
             if serverHost.isEmpty {
@@ -405,6 +534,11 @@ struct PreferencesView: View {
     }
     
     private func populateFields(from settings: BackupSettings) {
+        // Source fields
+        sourcePath = settings.sourcePath
+        excludePatterns = settings.excludePatterns
+        
+        // General fields
         remoteType = settings.remoteType
         backupInterval = settings.backupIntervalHours
         remoteName = settings.remoteName
@@ -442,6 +576,10 @@ struct PreferencesView: View {
         testResult = "Saving..."
         
         Task {
+            // Update source settings
+            settings.sourcePath = sourcePath
+            settings.excludePatterns = excludePatterns
+            
             // Update basic settings
             settings.remoteType = remoteType
             settings.backupIntervalHours = backupInterval
@@ -515,25 +653,40 @@ struct PreferencesView: View {
     private func testLocalConnection() async -> Bool {
         let fileManager = FileManager.default
         
-        // Test if destination path exists and is writable
+        // Test source path
+        guard sourcePathExists else {
+            await MainActor.run {
+                testResult = "❌ Source path does not exist: \(sourcePath)"
+            }
+            return false
+        }
+        
+        guard fileManager.isReadableFile(atPath: sourcePath) else {
+            await MainActor.run {
+                testResult = "❌ Source path is not readable"
+            }
+            return false
+        }
+        
+        // Test destination path
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: localDestinationPath, isDirectory: &isDirectory) else {
             await MainActor.run {
-                testResult = "❌ Path does not exist: \(localDestinationPath)"
+                testResult = "❌ Destination path does not exist: \(localDestinationPath)"
             }
             return false
         }
         
         guard isDirectory.boolValue else {
             await MainActor.run {
-                testResult = "❌ Path is not a directory"
+                testResult = "❌ Destination path is not a directory"
             }
             return false
         }
         
         guard fileManager.isWritableFile(atPath: localDestinationPath) else {
             await MainActor.run {
-                testResult = "❌ Path is not writable"
+                testResult = "❌ Destination path is not writable"
             }
             return false
         }
@@ -548,7 +701,7 @@ struct PreferencesView: View {
             return true
         } catch {
             await MainActor.run {
-                testResult = "❌ Cannot write to path: \(error.localizedDescription)"
+                testResult = "❌ Cannot write to destination: \(error.localizedDescription)"
             }
             return false
         }

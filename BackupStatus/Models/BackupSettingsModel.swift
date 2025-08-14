@@ -9,6 +9,10 @@ class BackupSettings {
     var backupIntervalHours: Int
     var lastSuccessfulBackup: Date?
     
+    // Source Configuration (NEW)
+    var sourcePath: String
+    var excludePatterns: String  // Comma-separated patterns to exclude
+    
     // WebDAV Configuration
     var webdavEnabled: Bool
     var webdavURL: String  // Path part only: "/remote.php/dav/files/daniel"
@@ -32,6 +36,10 @@ class BackupSettings {
         self.serverPort = 8081
         self.backupIntervalHours = 24
         
+        // Source defaults (NEW)
+        self.sourcePath = "/Users/danielfeddersen/Library/CloudStorage/OneDrive-Personal/workOnedrive"
+        self.excludePatterns = ".DS_Store,*.tmp,*.cache"
+        
         // WebDAV defaults
         self.webdavEnabled = true
         self.webdavURL = "/remote.php/dav/files/daniel"
@@ -42,12 +50,59 @@ class BackupSettings {
         self.webdavVerifySSL = true
         
         // Local defaults
-        self.localDestinationPath = "/Users/df/filen"
+        self.localDestinationPath = "/Users/danielfeddersen/Library/Mobile Documents/com~apple~CloudDocs/BackupOneDrive"
         self.localCreateDatedFolders = true
         
         // Remote defaults
         self.remoteName = "backup-remote"
         self.remoteType = .local  // Default to local now
+    }
+    
+    // MARK: - Source Path Helpers (NEW)
+    
+    var fullSourcePath: String {
+        // Ensure path ends with trailing slash for rsync/rclone
+        return sourcePath.hasSuffix("/") ? sourcePath : sourcePath + "/"
+    }
+    
+    var sourceExists: Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: sourcePath, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+    
+    var sourceIsReadable: Bool {
+        return FileManager.default.isReadableFile(atPath: sourcePath)
+    }
+    
+    func getSourceInfo() -> (fileCount: Int, totalSize: Int64)? {
+        let fileManager = FileManager.default
+        var fileCount = 0
+        var totalSize: Int64 = 0
+        
+        guard let enumerator = fileManager.enumerator(atPath: sourcePath) else {
+            return nil
+        }
+        
+        while let file = enumerator.nextObject() as? String {
+            let fullPath = "\(sourcePath)/\(file)"
+            if let attributes = try? fileManager.attributesOfItem(atPath: fullPath),
+               let fileType = attributes[.type] as? FileAttributeType,
+               fileType == .typeRegular {
+                fileCount += 1
+                if let size = attributes[.size] as? Int64 {
+                    totalSize += size
+                }
+            }
+        }
+        
+        return (fileCount, totalSize)
+    }
+    
+    var excludeArray: [String] {
+        return excludePatterns
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
     
     // MARK: - Password Management
@@ -95,25 +150,23 @@ class BackupSettings {
         }
     }
     
-    func localBackupPath(for date: Date = Date()) -> String {
+    func localLatestPath() -> String {
         let basePath = fullLocalDestinationPath
-        
-        if localCreateDatedFolders {
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "yyyy-MM-dd"
-            let dateString = dateFormatter.string(from: date)
-            return "\(basePath)/daily/\(dateString)"
-        } else {
-            return "\(basePath)/current"
-        }
+        return "\(basePath)/latest"
     }
     
     func localVersionPath(for date: Date = Date()) -> String {
         let basePath = fullLocalDestinationPath
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let dateString = dateFormatter.string(from: date)
-        return "\(basePath)/versions/\(dateString)"
+        
+        if localCreateDatedFolders {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+            let dateString = dateFormatter.string(from: date)
+            return "\(basePath)/versions/\(dateString)"
+        } else {
+            // If versioning is disabled, only update latest
+            return localLatestPath()
+        }
     }
     
     // MARK: - rclone Configuration
@@ -167,6 +220,15 @@ class BackupSettings {
     func validateConfiguration() -> (isValid: Bool, errors: [String]) {
         var errors: [String] = []
         
+        // Validate source path (NEW)
+        if sourcePath.isEmpty {
+            errors.append("Source path is required")
+        } else if !sourceExists {
+            errors.append("Source path does not exist: \(sourcePath)")
+        } else if !sourceIsReadable {
+            errors.append("Source path is not readable: \(sourcePath)")
+        }
+        
         switch remoteType {
         case .local:
             if localDestinationPath.isEmpty {
@@ -186,6 +248,11 @@ class BackupSettings {
                 if !fileManager.isWritableFile(atPath: localDestinationPath) {
                     errors.append("Local destination path is not writable")
                 }
+            }
+            
+            // Check that source and destination are different
+            if sourcePath == localDestinationPath {
+                errors.append("Source and destination paths cannot be the same")
             }
             
         case .webdav:

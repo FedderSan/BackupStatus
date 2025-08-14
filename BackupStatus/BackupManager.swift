@@ -12,10 +12,10 @@ class BackupManager: ObservableObject {
     private let dataActor: BackupDataActor
     private let logManager: LogManager
     
-    // Fixed paths - no more dynamic loading
+    // Fixed paths - config and rclone only
     private let rclonePath = "/usr/local/bin/rclone"
     private let configPath = "/Users/danielfeddersen/.config/rclone/rclone.conf"
-    private let sourcePath = "/Users/danielfeddersen/NextCloudMiniDaniel/Documents/"
+    // Source path now comes from settings!
     
     init(modelContainer: ModelContainer, logManager: LogManager) {
         self.dataActor = BackupDataActor(modelContainer: modelContainer)
@@ -27,12 +27,42 @@ class BackupManager: ObservableObject {
     
     // MARK: - Main Backup Function
     
-    func runBackup() async {
-        guard await shouldRunBackup() else {
-            currentStatus = .skipped
-            logManager.updateBackupStatus(.skipped)
-            logManager.log("Backup skipped - too soon since last backup", level: .info)
+    func runBackup(force: Bool = false) async {
+        // Check if already running
+        guard !isRunning else {
+            logManager.log("Backup already in progress, skipping", level: .warning)
             return
+        }
+        
+        logManager.log("Backup requested (force: \(force))", level: .debug)
+        
+        // Get or create settings
+        let settings = await dataActor.getOrCreateSettings()
+        
+        // Check if configuration is valid before proceeding
+        let validation = settings.validateConfiguration()
+        guard validation.isValid else {
+            let errorMessage = "Configuration incomplete: " + validation.errors.joined(separator: ", ")
+            logManager.log(errorMessage, level: .error)
+            currentStatus = .failed
+            logManager.updateBackupStatus(.failed)
+            return
+        }
+        
+        if !force {
+            // Check schedule for regular backup
+            if let lastSuccess = settings.lastSuccessfulBackup {
+                let hoursSince = Date().timeIntervalSince(lastSuccess) / 3600
+                if hoursSince < Double(settings.backupIntervalHours) {
+                    currentStatus = .skipped
+                    logManager.updateBackupStatus(.skipped)
+                    logManager.log("Backup skipped - only \(String(format: "%.1f", hoursSince)) hours since last backup (interval: \(settings.backupIntervalHours) hours)", level: .info)
+                    return
+                }
+            }
+            logManager.log("Scheduled backup proceeding", level: .info)
+        } else {
+            logManager.log("Force backup requested - bypassing schedule check", level: .info)
         }
         
         logManager.log("Starting backup process", level: .info)
@@ -45,16 +75,7 @@ class BackupManager: ObservableObject {
             let session = await dataActor.createBackupSession()
             let sessionID = session.persistentModelID
             
-            // Get settings and validate
-            guard let settings = await dataActor.getSettings() else {
-                throw BackupError.backupFailed("No settings found")
-            }
-            
-            let validation = settings.validateConfiguration()
-            guard validation.isValid else {
-                let errorMessage = "Configuration errors: " + validation.errors.joined(separator: ", ")
-                throw BackupError.backupFailed(errorMessage)
-            }
+            logManager.log("Backing up from: \(settings.fullSourcePath)", level: .info)
             
             // Perform backup based on remote type
             let result: (success: Bool, error: String?, filesCount: Int, totalSize: Int64)
@@ -143,38 +164,72 @@ class BackupManager: ObservableObject {
     
     private func performLocalBackup(_ settings: BackupSettings) async -> (success: Bool, error: String?, filesCount: Int, totalSize: Int64) {
         logManager.log("Starting local file system backup", level: .info)
+        logManager.log("Source: \(settings.fullSourcePath)", level: .debug)
+        logManager.log("Destination: \(settings.fullLocalDestinationPath)", level: .debug)
         
         let fileManager = FileManager.default
         let date = Date()
         
         do {
-            // Create destination directories
-            let dailyPath = settings.localBackupPath(for: date)
-            try fileManager.createDirectory(atPath: dailyPath, withIntermediateDirectories: true, attributes: nil)
-            
-            // Perform daily sync using rsync for better performance
-            logManager.log("Syncing to daily folder: \(dailyPath)", level: .info)
-            let dailyResult = await runRsyncCommand(from: sourcePath, to: dailyPath, delete: true)
-            
-            guard dailyResult.success else {
-                return (false, "Daily sync failed: \(dailyResult.error ?? "Unknown")", 0, 0)
+            // Build exclude arguments if any patterns are specified
+            var excludeArgs: [String] = []
+            for pattern in settings.excludeArray {
+                excludeArgs.append("--exclude")
+                excludeArgs.append(pattern)
             }
             
-            // Create version backup if enabled
+            // Step 1: Always sync to 'latest' folder (this is the current complete backup)
+            let latestPath = settings.localLatestPath()
+            try fileManager.createDirectory(atPath: latestPath, withIntermediateDirectories: true, attributes: nil)
+            
+            logManager.log("Syncing to latest folder: \(latestPath)", level: .info)
+            let latestResult = await runRsyncCommand(
+                from: settings.fullSourcePath,
+                to: latestPath,
+                delete: true,  // Mirror source exactly
+                excludePatterns: excludeArgs
+            )
+            
+            guard latestResult.success else {
+                return (false, "Latest sync failed: \(latestResult.error ?? "Unknown")", 0, 0)
+            }
+            
+            // Step 2: Create versioned backup if enabled
             if settings.localCreateDatedFolders {
                 let versionPath = settings.localVersionPath(for: date)
-                try fileManager.createDirectory(atPath: versionPath, withIntermediateDirectories: true, attributes: nil)
                 
-                logManager.log("Creating version backup: \(versionPath)", level: .info)
-                let versionResult = await runRsyncCommand(from: sourcePath, to: versionPath, delete: false)
+                // Only create a version if it's different from latest (to avoid duplicates)
+                // For force backup or scheduled backup, we create a snapshot
+                logManager.log("Creating version snapshot: \(versionPath)", level: .info)
                 
-                guard versionResult.success else {
-                    return (false, "Version backup failed: \(versionResult.error ?? "Unknown")", 0, 0)
+                try fileManager.createDirectory(
+                    atPath: URL(fileURLWithPath: versionPath).deletingLastPathComponent().path,
+                    withIntermediateDirectories: true,
+                    attributes: nil
+                )
+                
+                // Use hard links for efficiency (instant, no extra space for unchanged files)
+                let linkResult = await runHardLinkCopy(from: latestPath, to: versionPath)
+                
+                if !linkResult.success {
+                    // Fall back to regular copy if hard links fail
+                    logManager.log("Hard link failed, using regular copy", level: .warning)
+                    let versionResult = await runRsyncCommand(
+                        from: latestPath,
+                        to: versionPath,
+                        delete: false,
+                        excludePatterns: []
+                    )
+                    
+                    if !versionResult.success {
+                        logManager.log("Version backup failed: \(versionResult.error ?? "Unknown")", level: .warning)
+                        // Don't fail the whole backup if versioning fails
+                    }
                 }
             }
             
-            // Get backup stats
-            let stats = await getLocalBackupStats(dailyPath)
+            // Get backup stats from latest folder
+            let stats = await getLocalBackupStats(latestPath)
             
             logManager.log("Local backup completed: \(stats.fileCount) files, \(stats.totalSize) bytes", level: .info)
             return (true, nil, stats.fileCount, stats.totalSize)
@@ -184,7 +239,33 @@ class BackupManager: ObservableObject {
         }
     }
     
-    private func runRsyncCommand(from source: String, to destination: String, delete: Bool) async -> (success: Bool, error: String?) {
+    private func runHardLinkCopy(from source: String, to destination: String) async -> (success: Bool, error: String?) {
+        return await withCheckedContinuation { continuation in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/cp")
+            task.arguments = ["-al", source, destination]  // -a = archive, -l = hard links
+            
+            let errorPipe = Pipe()
+            task.standardError = errorPipe
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                
+                if task.terminationStatus == 0 {
+                    continuation.resume(returning: (true, nil))
+                } else {
+                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                    continuation.resume(returning: (false, errorOutput))
+                }
+            } catch {
+                continuation.resume(returning: (false, error.localizedDescription))
+            }
+        }
+    }
+    
+    private func runRsyncCommand(from source: String, to destination: String, delete: Bool, excludePatterns: [String] = []) async -> (success: Bool, error: String?) {
         return await withCheckedContinuation { continuation in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/rsync")
@@ -197,6 +278,9 @@ class BackupManager: ObservableObject {
             if delete {
                 arguments.append("--delete")
             }
+            
+            // Add exclude patterns
+            arguments.append(contentsOf: excludePatterns)
             
             arguments.append(source)
             arguments.append(destination)
@@ -266,7 +350,18 @@ class BackupManager: ObservableObject {
     private func testLocalConnection(_ settings: BackupSettings) async -> Bool {
         let fileManager = FileManager.default
         
-        // Test if destination path exists and is writable
+        // Test source path
+        guard settings.sourceExists else {
+            logManager.log("Source path does not exist: \(settings.sourcePath)", level: .error)
+            return false
+        }
+        
+        guard settings.sourceIsReadable else {
+            logManager.log("Source path is not readable: \(settings.sourcePath)", level: .error)
+            return false
+        }
+        
+        // Test destination path
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: settings.localDestinationPath, isDirectory: &isDirectory) else {
             logManager.log("Local destination path does not exist: \(settings.localDestinationPath)", level: .error)
@@ -298,51 +393,77 @@ class BackupManager: ObservableObject {
         }
     }
     
-    // MARK: - WebDAV/rclone Operations (existing code)
+    // MARK: - WebDAV/rclone Operations
     
     private func performRcloneBackup(_ settings: BackupSettings) async -> (success: Bool, error: String?, filesCount: Int, totalSize: Int64) {
-        let dateDaily = DateFormatter.dailyFormat.string(from: Date())
         let dateVersion = DateFormatter.versionFormat.string(from: Date())
         
         // Build remote paths
         let remoteBase = "\(settings.remoteName):\(settings.webdavPath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))"
         
-        // Step 1: Daily sync
-        logManager.log("Starting daily sync", level: .info)
-        let dailyResult = await runRcloneCommand([
-            "sync",
-            sourcePath,
-            "\(remoteBase)/daily/\(dateDaily)",
-            "--progress",
-            "--transfers", "4",
-            "--timeout", "300s"
-        ])
-        
-        guard dailyResult.success else {
-            return (false, "Daily sync failed: \(dailyResult.error ?? "Unknown")", 0, 0)
+        // Build exclude arguments
+        var excludeArgs: [String] = []
+        for pattern in settings.excludeArray {
+            excludeArgs.append("--exclude")
+            excludeArgs.append(pattern)
         }
         
-        // Step 2: Version backup
-        logManager.log("Starting version backup", level: .info)
-        let versionResult = await runRcloneCommand([
-            "copy",
-            sourcePath,
-            "\(remoteBase)/current",
-            "--update",
-            "--backup-dir", "\(remoteBase)/versions/\(dateVersion)",
+        // Step 1: Sync to 'latest' folder (always current)
+        logManager.log("Syncing to latest folder on WebDAV", level: .info)
+        var latestArgs = [
+            "sync",
+            settings.fullSourcePath,
+            "\(remoteBase)/latest",
             "--progress",
             "--transfers", "4",
             "--timeout", "300s"
-        ])
+        ]
+        latestArgs.append(contentsOf: excludeArgs)
         
-        guard versionResult.success else {
-            return (false, "Version backup failed: \(versionResult.error ?? "Unknown")", 0, 0)
+        let latestResult = await runRcloneCommand(latestArgs)
+        
+        guard latestResult.success else {
+            return (false, "Latest sync failed: \(latestResult.error ?? "Unknown")", 0, 0)
+        }
+        
+        // Step 2: Create version backup (using server-side copy if possible)
+        logManager.log("Creating version backup: \(dateVersion)", level: .info)
+        
+        // First try server-side copy (much faster)
+        let copyArgs = [
+            "copy",
+            "\(remoteBase)/latest",
+            "\(remoteBase)/versions/\(dateVersion)",
+            "--progress",
+            "--timeout", "300s"
+        ]
+        
+        let versionResult = await runRcloneCommand(copyArgs)
+        
+        if !versionResult.success {
+            logManager.log("Server-side copy failed, trying direct upload", level: .warning)
+            // Fall back to direct upload if server-side copy fails
+            var directArgs = [
+                "copy",
+                settings.fullSourcePath,
+                "\(remoteBase)/versions/\(dateVersion)",
+                "--progress",
+                "--transfers", "4",
+                "--timeout", "300s"
+            ]
+            directArgs.append(contentsOf: excludeArgs)
+            
+            let directResult = await runRcloneCommand(directArgs)
+            if !directResult.success {
+                logManager.log("Version backup failed: \(directResult.error ?? "Unknown")", level: .warning)
+                // Don't fail the whole backup if versioning fails
+            }
         }
         
         // Get stats (simplified for now)
-        let stats = await getBackupStats(remoteBase, dateDaily)
+        let stats = await getBackupStats(remoteBase, "latest")
         
-        logManager.log("Backup completed: \(stats.fileCount) files, \(stats.totalSize) bytes", level: .info)
+        logManager.log("WebDAV backup completed: \(stats.fileCount) files, \(stats.totalSize) bytes", level: .info)
         return (true, nil, stats.fileCount, stats.totalSize)
     }
     
@@ -477,19 +598,6 @@ class BackupManager: ObservableObject {
     
     // MARK: - Helper Methods
     
-    private func shouldRunBackup() async -> Bool {
-        guard !isRunning else { return false }
-        
-        guard let settings = await dataActor.getSettings() else { return true }
-        
-        if let lastSuccess = settings.lastSuccessfulBackup {
-            let hoursSince = Date().timeIntervalSince(lastSuccess) / 3600
-            return hoursSince >= Double(settings.backupIntervalHours)
-        }
-        
-        return true
-    }
-    
     func loadLastBackupStatus() async {
         let recent = await dataActor.getRecentSessions(limit: 1)
         if let last = recent.first {
@@ -500,6 +608,10 @@ class BackupManager: ObservableObject {
     }
     
     // MARK: - Public Helper Methods
+    
+    func runForceBackup() async {
+        await runBackup(force: true)
+    }
     
     func getSettings() async -> BackupSettings? {
         return await dataActor.getSettings()
@@ -526,8 +638,13 @@ class BackupManager: ObservableObject {
             return false
         }
         
+        logManager.log("📁 Source: \(settings.fullSourcePath)", level: .debug)
+        logManager.log("📁 Source exists: \(settings.sourceExists)", level: .debug)
+        logManager.log("📁 Source readable: \(settings.sourceIsReadable)", level: .debug)
+        
         switch settings.remoteType {
         case .local:
+            logManager.log("📁 Destination: \(settings.fullLocalDestinationPath)", level: .debug)
             return await testLocalConnection(settings)
         case .webdav:
             return await ConnectionDebugHelper.shared.debugConnection(with: settings, logManager: logManager)
@@ -545,18 +662,27 @@ class BackupManager: ObservableObject {
         
         logManager.log("🔧 Current configuration:", level: .info)
         logManager.log("Remote Type: \(settings.remoteType.displayName)", level: .debug)
+        logManager.log("Source Path: \(settings.fullSourcePath)", level: .debug)
+        
+        if let sourceInfo = settings.getSourceInfo() {
+            logManager.log("Source contains: \(sourceInfo.fileCount) files, \(ByteCountFormatter.string(fromByteCount: sourceInfo.totalSize, countStyle: .file))", level: .debug)
+        }
         
         switch settings.remoteType {
         case .local:
             logManager.log("Local Path: \(settings.localDestinationPath)", level: .debug)
             logManager.log("Create Dated Folders: \(settings.localCreateDatedFolders)", level: .debug)
-            logManager.log("Daily Path: \(settings.localBackupPath())", level: .debug)
+            logManager.log("Latest Path: \(settings.localLatestPath())", level: .debug)
             logManager.log("Version Path: \(settings.localVersionPath())", level: .debug)
         case .webdav:
             let config = settings.generateRcloneConfig()
             logManager.log(config, level: .debug)
         default:
             logManager.log("Configuration not yet implemented for \(settings.remoteType.displayName)", level: .debug)
+        }
+        
+        if !settings.excludePatterns.isEmpty {
+            logManager.log("Exclude patterns: \(settings.excludeArray.joined(separator: ", "))", level: .debug)
         }
     }
     
