@@ -8,18 +8,20 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - Enhanced App with SwiftData and Log Window
+// MARK: - Enhanced App with SwiftData and Safe Window Management
 @main
 struct BackupStatusApp: App {
     let modelContainer: ModelContainer
     @StateObject private var logManager = LogManager()
     
     init() {
-        
         // Define schema
-            let schema = Schema([BackupSession.self, BackupSettings.self])
-            let config = ModelConfiguration("Default", schema: schema)
+        let schema = Schema([BackupSession.self, BackupSettings.self])
+        let config = ModelConfiguration("Default", schema: schema)
 
+        // COMMENTED OUT: Database deletion code (for development only)
+        // Uncomment the lines below only if you need to reset the database during development
+        /*
         let storeURL = config.url // this gives '.../default.store'
         let baseURL = storeURL.deletingPathExtension()
         let extensions = ["store", "store-shm", "store-wal"]
@@ -35,8 +37,7 @@ struct BackupStatusApp: App {
                 }
             }
         }
-        
-        
+        */
         
         do {
             modelContainer = try ModelContainer(for: BackupSession.self, BackupSettings.self)

@@ -1,7 +1,8 @@
-// MARK: - Updated MenuBarView with Force Backup Option
+// MARK: - Updated MenuBarView with ViewBridge Error Fixes
 import SwiftUI
 import SwiftData
 
+@MainActor
 struct MenuBarView: View {
     @StateObject private var backupManager: BackupManager
     @ObservedObject var logManager: LogManager
@@ -64,15 +65,7 @@ struct MenuBarView: View {
             // Backup Actions
             VStack(alignment: .leading, spacing: 4) {
                 Button(action: {
-                    Task {
-                        let settings = await backupManager.getOrCreateSettings()
-                        let validation = settings.validateConfiguration()
-                        if !validation.isValid {
-                            showingConfigurationAlert = true
-                        } else {
-                            await backupManager.runBackup()
-                        }
-                    }
+                    runScheduledBackupSafely()
                 }) {
                     HStack {
                         Image(systemName: "arrow.clockwise")
@@ -83,26 +76,7 @@ struct MenuBarView: View {
                 .help("Runs backup only if enough time has passed since last backup")
                 
                 Button(action: {
-                    Task {
-                        let settings = await backupManager.getOrCreateSettings()
-                        let validation = settings.validateConfiguration()
-                        if !validation.isValid {
-                            showingConfigurationAlert = true
-                        } else {
-                            logManager.log("User clicked Force Backup Now", level: .debug)
-                            if let lastBackup = backupManager.lastBackupTime {
-                                // Show confirmation if there was a recent backup
-                                let hoursSince = Date().timeIntervalSince(lastBackup) / 3600
-                                if hoursSince < 1 {
-                                    showingForceBackupConfirmation = true
-                                } else {
-                                    await backupManager.runForceBackup()
-                                }
-                            } else {
-                                await backupManager.runForceBackup()
-                            }
-                        }
-                    }
+                    runForceBackupSafely()
                 }) {
                     HStack {
                         Image(systemName: "bolt.fill")
@@ -116,7 +90,7 @@ struct MenuBarView: View {
             Divider()
             
             Button("Test Connection") {
-                Task {
+                Task { @MainActor in
                     await backupManager.runConnectionTest()
                 }
             }
@@ -124,36 +98,36 @@ struct MenuBarView: View {
             
             Divider()
             
-            // Window Actions
+            // Window Actions - Fixed for ViewBridge issues
             Button("View History") {
-                openWindow(id: "history")
+                safeOpenWindow("history")
             }
             
             Button("View Log") {
-                openWindow(id: "log")
+                safeOpenWindow("log")
             }
             
             Button("Settings") {
-                openWindow(id: "settings")
+                safeOpenWindow("settings")
             }
             
             #if DEBUG
             Divider()
             
             Button("🔍 Debug Connection") {
-                Task {
+                Task { @MainActor in
                     await backupManager.debugConnection()
                 }
             }
             
             Button("🔧 Debug rclone Config") {
-                Task {
+                Task { @MainActor in
                     await backupManager.debugRcloneConfig()
                 }
             }
             
             Button("🔐 Debug Password") {
-                Task {
+                Task { @MainActor in
                     await backupManager.debugPasswordHandling()
                 }
             }
@@ -166,9 +140,10 @@ struct MenuBarView: View {
             }
         }
         .padding()
+        .frame(minWidth: 220)
         .alert("Configuration Required", isPresented: $showingConfigurationAlert) {
             Button("Open Settings") {
-                openWindow(id: "settings")
+                safeOpenWindow("settings")
             }
             Button("Cancel", role: .cancel) { }
         } message: {
@@ -177,7 +152,7 @@ struct MenuBarView: View {
         .alert("Force Backup", isPresented: $showingForceBackupConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Force Backup", role: .destructive) {
-                Task {
+                Task { @MainActor in
                     await backupManager.runForceBackup()
                 }
             }
@@ -201,6 +176,52 @@ struct MenuBarView: View {
             timer?.invalidate()
         }
     }
+    
+    // MARK: - Safe Action Methods
+    
+    private func runScheduledBackupSafely() {
+        Task { @MainActor in
+            let settings = await backupManager.getOrCreateSettings()
+            let validation = settings.validateConfiguration()
+            if !validation.isValid {
+                showingConfigurationAlert = true
+            } else {
+                await backupManager.runBackup()
+            }
+        }
+    }
+    
+    private func runForceBackupSafely() {
+        Task { @MainActor in
+            let settings = await backupManager.getOrCreateSettings()
+            let validation = settings.validateConfiguration()
+            if !validation.isValid {
+                showingConfigurationAlert = true
+            } else {
+                logManager.log("User clicked Force Backup Now", level: .debug)
+                if let lastBackup = backupManager.lastBackupTime {
+                    let hoursSince = Date().timeIntervalSince(lastBackup) / 3600
+                    if hoursSince < 1 {
+                        showingForceBackupConfirmation = true
+                    } else {
+                        await backupManager.runForceBackup()
+                    }
+                } else {
+                    await backupManager.runForceBackup()
+                }
+            }
+        }
+    }
+    
+    private func safeOpenWindow(_ identifier: String) {
+        Task { @MainActor in
+            // Add tiny delay to prevent ViewBridge issues
+            try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
+            openWindow(id: identifier)
+        }
+    }
+    
+    // MARK: - UI Helpers
     
     private var backupStatusIcon: String {
         switch backupManager.currentStatus {
@@ -231,9 +252,14 @@ struct MenuBarView: View {
     }
     
     private func startPeriodicBackup() {
+        // Cancel any existing timer first
+        timer?.invalidate()
+        
+        // Create new timer with safe execution
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
-            Task {
-                // This runs the regular backup (checks schedule)
+            Task { @MainActor in
+                // Only run if not currently running and ensure we're on main thread
+                guard !backupManager.isRunning else { return }
                 await backupManager.runBackup()
             }
         }

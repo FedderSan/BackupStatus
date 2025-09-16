@@ -1,154 +1,161 @@
-//
-//  LogView.swift
-//  BackupStatus
-//
-//  Created by Daniel Feddersen on 26/07/2025.
-//
-
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct LogView: View {
     @ObservedObject var logManager: LogManager
-    @State private var selectedLogLevel: LogEntry.LogLevel? = nil
-    @State private var searchText: String = ""
-    @State private var autoScroll: Bool = true
+    @State private var selectedLevel: LogLevel? = nil
+    @State private var searchText = ""
+    @State private var isExporting = false
+    @State private var showingExportPanel = false
     
-    var filteredLogs: [LogEntry] {
-        var logs = logManager.logEntries
+    private var filteredLogs: [LogEntry] {
+        var filtered = logManager.logs
         
-        // Filter by log level
-        if let selectedLevel = selectedLogLevel {
-            logs = logs.filter { $0.level == selectedLevel }
+        // Filter by level if selected
+        if let selectedLevel = selectedLevel {
+            filtered = filtered.filter { $0.level == selectedLevel }
         }
         
         // Filter by search text
         if !searchText.isEmpty {
-            logs = logs.filter { $0.message.localizedCaseInsensitiveContains(searchText) }
+            filtered = filtered.filter {
+                $0.message.localizedCaseInsensitiveContains(searchText)
+            }
         }
         
-        return logs
+        return filtered.reversed() // Show newest first
     }
     
     var body: some View {
         VStack(spacing: 0) {
-            // Toolbar
+            // Header with controls
             HStack {
-                // Log level filter
-                Picker("Log Level", selection: $selectedLogLevel) {
-                    Text("All Levels").tag(nil as LogEntry.LogLevel?)
-                    ForEach(LogEntry.LogLevel.allCases, id: \.self) { level in
+                Text("Backup Logs")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Spacer()
+                
+                // Level filter
+                Picker("Filter Level", selection: $selectedLevel) {
+                    Text("All Levels").tag(LogLevel?.none)
+                    ForEach(LogLevel.allCases, id: \.self) { level in
                         HStack {
-                            Image(systemName: level.icon)
-                                .foregroundColor(level.color)
-                            Text(level.rawValue)
+                            Image(systemName: level.systemImage)
+                            Text(level.displayName)
                         }
-                        .tag(level as LogEntry.LogLevel?)
+                        .tag(LogLevel?.some(level))
                     }
                 }
-                .pickerStyle(MenuPickerStyle())
-                .frame(width: 150)
+                .pickerStyle(.menu)
+                .frame(width: 120)
                 
-                Spacer()
-                
-                // Search field
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.secondary)
-                    TextField("Search logs...", text: $searchText)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                Button("Export") {
+                    showingExportPanel = true
                 }
-                .frame(width: 200)
                 
-                Spacer()
-                
-                // Auto-scroll toggle
-                Toggle("Auto-scroll", isOn: $autoScroll)
-                    .toggleStyle(CheckboxToggleStyle())
-                		
-                // Clear logs button
                 Button("Clear") {
                     logManager.clearLogs()
                 }
-                
-                // Export logs button
-                Button("Export") {
-                    exportLogs()
-                }
+                .foregroundColor(.red)
             }
             .padding()
-            .background(Color(NSColor.controlBackgroundColor))
+            
+            // Search bar
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                TextField("Search logs...", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                
+                if !searchText.isEmpty {
+                    Button("Clear") {
+                        searchText = ""
+                    }
+                    .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 8)
             
             Divider()
             
-            // Log entries
+            // Logs list
             if filteredLogs.isEmpty {
                 VStack {
-                    Spacer()
-                    Text("No log entries")
+                    Image(systemName: "doc.text")
+                        .font(.largeTitle)
                         .foregroundColor(.secondary)
-                        .font(.title2)
-                    Spacer()
+                    Text(logManager.logs.isEmpty ? "No logs yet" : "No logs match your filters")
+                        .foregroundColor(.secondary)
+                        .padding()
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollViewReader { proxy in
-                    List(filteredLogs) { entry in
-                        LogEntryRow(entry: entry)
-                    }
-                    .listStyle(PlainListStyle())
-                    .onChange(of: logManager.logEntries.count) { _ in
-                        if autoScroll && !filteredLogs.isEmpty {
-                            withAnimation(.easeOut(duration: 0.3)) {
-                                proxy.scrollTo(filteredLogs.last?.id, anchor: .bottom)
-                            }
-                        }
-                    }
+                List(filteredLogs) { entry in
+                    LogEntryView(entry: entry)
                 }
+                .listStyle(.plain)
             }
-        }
-        .navigationTitle("Backup Log")
-        .frame(minWidth: 600, minHeight: 400)
-    }
-    
-    private func exportLogs() {
-        let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [.plainText]
-        savePanel.nameFieldStringValue = "backup_log_\(Date().formatted(date: .abbreviated, time: .omitted)).txt"
-        
-        if savePanel.runModal() == .OK {
-            guard let url = savePanel.url else { return }
             
-            do {
-                try logManager.exportLogs().write(to: url, atomically: true, encoding: .utf8)
-            } catch {
-                // Could show an alert here
-                print("Failed to export logs: \(error)")
+            // Status bar
+            HStack {
+                Text("\(filteredLogs.count) of \(logManager.logs.count) entries")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("Live updating")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 4)
+            .background(Color(NSColor.controlBackgroundColor))
+        }
+        .fileExporter(
+            isPresented: $showingExportPanel,
+            document: LogDocument(entries: logManager.logs),
+            contentType: .plainText,
+            defaultFilename: "backup-logs-\(Date().formatted(date: .numeric, time: .omitted)).txt"
+        ) { result in
+            switch result {
+            case .success(let url):
+                print("Logs exported to: \(url)")
+            case .failure(let error):
+                print("Export failed: \(error)")
             }
         }
     }
 }
 
-struct LogEntryRow: View {
+struct LogEntryView: View {
     let entry: LogEntry
+    
+    private var timeFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .medium
+        return formatter
+    }
     
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             // Timestamp
-            Text(entry.timestamp.formatted(date: .omitted, time: .standard))
+            Text(timeFormatter.string(from: entry.timestamp))
                 .font(.system(.caption, design: .monospaced))
                 .foregroundColor(.secondary)
                 .frame(width: 80, alignment: .leading)
             
-            // Log level icon and badge
+            // Level indicator
             HStack(spacing: 4) {
-                Image(systemName: entry.level.icon)
+                Image(systemName: entry.level.systemImage)
                     .foregroundColor(entry.level.color)
-                    .frame(width: 12)
-                
-                Text(entry.level.rawValue)
-                    .font(.system(.caption, design: .monospaced))
+                Text(entry.level.displayName)
+                    .font(.caption)
+                    .fontWeight(.medium)
                     .foregroundColor(entry.level.color)
-                    .frame(width: 60, alignment: .leading)
             }
+            .frame(width: 60, alignment: .leading)
             
             // Message
             Text(entry.message)
@@ -157,20 +164,47 @@ struct LogEntryRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 2)
+        .contextMenu {
+            Button("Copy Message") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(entry.message, forType: .string)
+            }
+            
+            Button("Copy Full Entry") {
+                let fullEntry = "[\(entry.timestamp)] [\(entry.level.displayName)] \(entry.message)"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(fullEntry, forType: .string)
+            }
+        }
     }
 }
 
-struct CheckboxToggleStyle: ToggleStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Button {
-            configuration.isOn.toggle()
-        } label: {
-            HStack {
-                Image(systemName: configuration.isOn ? "checkmark.square" : "square")
-                    .foregroundColor(configuration.isOn ? .accentColor : .secondary)
-                configuration.label
-            }
-        }
-        .buttonStyle(PlainButtonStyle())
+// Document type for exporting logs
+struct LogDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.plainText] }
+    
+    var entries: [LogEntry]
+    
+    init(entries: [LogEntry]) {
+        self.entries = entries
+    }
+    
+    init(configuration: ReadConfiguration) throws {
+        // Not used for export
+        self.entries = []
+    }
+    
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .medium
+        
+        let content = entries.map { entry in
+            "[\(formatter.string(from: entry.timestamp))] [\(entry.level.displayName)] \(entry.message)"
+        }.joined(separator: "\n")
+        
+        return FileWrapper(regularFileWithContents: content.data(using: .utf8) ?? Data())
     }
 }
+
+// Extension removed - systemImage already defined in LogManagerModel

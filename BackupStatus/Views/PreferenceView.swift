@@ -10,6 +10,10 @@ struct PreferencesView: View {
     @State private var remoteType: RemoteType = .local
     @State private var backupInterval = 1
     
+    // Login state items
+    @State private var launchAtLogin = false
+    @State private var autoStartError = ""
+    
     // Source fields (NEW)
     @State private var sourcePath = ""
     @State private var excludePatterns = ""
@@ -153,6 +157,34 @@ struct PreferencesView: View {
                         .padding()
                     }
                     
+                    //login item
+                    GroupBox("Startup Options") {
+                        VStack(spacing: 12) {
+                            HStack {
+                                Toggle("Launch BackupStatus at login", isOn: $launchAtLogin)
+                                    .onChange(of: launchAtLogin) { newValue in
+                                        setLaunchAtLogin(newValue)
+                                    }
+                                Spacer()
+                            }
+                            
+                            if !autoStartError.isEmpty {
+                                HStack {
+                                    Image(systemName: "exclamationmark.triangle")
+                                        .foregroundColor(.orange)
+                                    Text(autoStartError)
+                                        .foregroundColor(.orange)
+                                        .font(.caption)
+                                    Spacer()
+                                }
+                            }
+                            
+                            Text("When enabled, BackupStatus will automatically start when you log in to your Mac")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding()
+                    }
                     // Local Configuration
                     if remoteType == .local {
                         GroupBox("Local/Network Drive Configuration") {
@@ -392,6 +424,7 @@ struct PreferencesView: View {
         .frame(minWidth: 700, idealWidth: 800, maxWidth: 1200, minHeight: 600, idealHeight: 700, maxHeight: 1000)
         .onAppear {
             loadSettings()
+            loadAutoStartSettings() // Add this line
         }
     }
     
@@ -400,6 +433,21 @@ struct PreferencesView: View {
     private var sourcePathExists: Bool {
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: sourcePath, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+    
+    private func loadAutoStartSettings() {
+        launchAtLogin = LoginItemManager.shared.isEnabled
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            try LoginItemManager.shared.setEnabled(enabled)
+            autoStartError = ""
+        } catch {
+            autoStartError = "Failed to update login settings: \(error.localizedDescription)"
+            // Revert the toggle if it failed
+            launchAtLogin = LoginItemManager.shared.isEnabled
+        }
     }
     
     private func getSourceInfo() -> (fileCount: Int, totalSize: Int64)? {
