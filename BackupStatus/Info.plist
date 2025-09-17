@@ -1,0 +1,66 @@
+//
+//  Info.plist
+//  BackupStatus
+//
+//  Created by Daniel Feddersen on 17/09/2025.
+//
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>BackupStatus</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2025 Daniel Feddersen. All rights reserved.</string>
+    <key>NSMainStoryboardFile</key>
+    <string>Main</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    
+    <!-- File System Access -->
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>BackupStatus needs access to backup files from your Desktop.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>BackupStatus needs access to backup files from your Documents.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>BackupStatus needs access to backup files from your Downloads.</string>
+    
+    <!-- Network Access -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>BackupStatus needs network access to connect to backup servers.</string>
+    
+    <!-- URL Schemes for window management -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.danielfeddersen.backupstatus</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>backupstatus</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
