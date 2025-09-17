@@ -1,4 +1,4 @@
-// MARK: - Updated MenuBarView with ViewBridge Error Fixes
+// MARK: - Complete Fixed MenuBarView with Proper Force Backup Logic
 import SwiftUI
 import SwiftData
 
@@ -84,7 +84,7 @@ struct MenuBarView: View {
                     }
                 }
                 .disabled(backupManager.isRunning)
-                .help("Immediately runs backup, ignoring schedule")
+                .help("Immediately runs backup, ignoring schedule and time restrictions")
             }
             
             Divider()
@@ -131,6 +131,10 @@ struct MenuBarView: View {
                     await backupManager.debugPasswordHandling()
                 }
             }
+            
+            Button("Debug Tools") {
+                safeOpenWindow("debug")
+            }
             #endif
             
             Divider()
@@ -143,30 +147,36 @@ struct MenuBarView: View {
         .frame(minWidth: 220)
         .alert("Configuration Required", isPresented: $showingConfigurationAlert) {
             Button("Open Settings") {
+                logManager.log("🔧 User opened settings from config alert", level: .info)
                 safeOpenWindow("settings")
             }
-            Button("Cancel", role: .cancel) { }
+            Button("Cancel", role: .cancel) {
+                logManager.log("❌ User cancelled configuration alert", level: .info)
+            }
         } message: {
             Text("Please configure your backup settings first. You need to set the source folder and destination.")
         }
         .alert("Force Backup", isPresented: $showingForceBackupConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Force Backup", role: .destructive) {
+            Button("Cancel", role: .cancel) {
+                logManager.log("❌ User cancelled scheduled backup confirmation", level: .info)
+            }
+            Button("Run Backup", role: .destructive) {
+                logManager.log("✅ User confirmed scheduled backup", level: .info)
                 Task { @MainActor in
-                    await backupManager.runForceBackup()
+                    await backupManager.runBackup()
                 }
             }
         } message: {
             if let lastBackup = backupManager.lastBackupTime {
                 let minutesAgo = Int(Date().timeIntervalSince(lastBackup) / 60)
                 if minutesAgo < 60 {
-                    Text("Last backup was \(minutesAgo) minute\(minutesAgo == 1 ? "" : "s") ago. Are you sure you want to force another backup now?")
+                    Text("Last backup was \(minutesAgo) minute\(minutesAgo == 1 ? "" : "s") ago. Are you sure you want to run another backup now?")
                 } else {
                     let hoursAgo = minutesAgo / 60
-                    Text("Last backup was \(hoursAgo) hour\(hoursAgo == 1 ? "" : "s") ago. Are you sure you want to force another backup now?")
+                    Text("Last backup was \(hoursAgo) hour\(hoursAgo == 1 ? "" : "s") ago. Are you sure you want to run another backup now?")
                 }
             } else {
-                Text("Are you sure you want to force a backup now?")
+                Text("Are you sure you want to run a backup now?")
             }
         }
         .onAppear {
@@ -180,36 +190,64 @@ struct MenuBarView: View {
     // MARK: - Safe Action Methods
     
     private func runScheduledBackupSafely() {
+        logManager.log("🔄 Scheduled backup button clicked", level: .info)
         Task { @MainActor in
             let settings = await backupManager.getOrCreateSettings()
             let validation = settings.validateConfiguration()
+            
+            logManager.log("📋 Configuration validation result: \(validation.isValid)", level: .info)
             if !validation.isValid {
+                logManager.log("❌ Configuration errors: \(validation.errors.joined(separator: ", "))", level: .error)
                 showingConfigurationAlert = true
             } else {
-                await backupManager.runBackup()
+                logManager.log("✅ Configuration valid", level: .info)
+                
+                // For scheduled backup, check if we should show confirmation
+                if let lastBackup = backupManager.lastBackupTime {
+                    let hoursSince = Date().timeIntervalSince(lastBackup) / 3600
+                    logManager.log("⏰ Last backup was \(String(format: "%.2f", hoursSince)) hours ago", level: .info)
+                    
+                    if hoursSince < 1 {
+                        logManager.log("⚠️ Recent backup detected, showing confirmation for scheduled backup", level: .info)
+                        showingForceBackupConfirmation = true
+                    } else {
+                        logManager.log("🚀 No recent backup, running scheduled backup immediately", level: .info)
+                        await backupManager.runBackup()
+                    }
+                } else {
+                    logManager.log("📝 No previous backup found, running scheduled backup", level: .info)
+                    await backupManager.runBackup()
+                }
             }
         }
     }
     
+    // FIXED: Force backup should NEVER show confirmations or time checks
     private func runForceBackupSafely() {
+        logManager.log("🔥 Force backup button clicked", level: .info)
+        
         Task { @MainActor in
             let settings = await backupManager.getOrCreateSettings()
             let validation = settings.validateConfiguration()
+            
+            logManager.log("📋 Force backup - Configuration validation result: \(validation.isValid)", level: .info)
+            
             if !validation.isValid {
+                logManager.log("❌ Configuration invalid. Errors: \(validation.errors.joined(separator: ", "))", level: .error)
                 showingConfigurationAlert = true
-            } else {
-                logManager.log("User clicked Force Backup Now", level: .debug)
-                if let lastBackup = backupManager.lastBackupTime {
-                    let hoursSince = Date().timeIntervalSince(lastBackup) / 3600
-                    if hoursSince < 1 {
-                        showingForceBackupConfirmation = true
-                    } else {
-                        await backupManager.runForceBackup()
-                    }
-                } else {
-                    await backupManager.runForceBackup()
-                }
+                return
             }
+            
+            // FIXED: No time checks, no confirmations - just run it!
+            if let lastBackup = backupManager.lastBackupTime {
+                let hoursSince = Date().timeIntervalSince(lastBackup) / 3600
+                logManager.log("⏰ Last backup was \(String(format: "%.2f", hoursSince)) hours ago (ignoring for force backup)", level: .info)
+            } else {
+                logManager.log("📝 No previous backup found", level: .info)
+            }
+            
+            logManager.log("🚀 Force backup - running immediately (no restrictions)", level: .info)
+            await backupManager.runForceBackup()
         }
     }
     
@@ -260,6 +298,7 @@ struct MenuBarView: View {
             Task { @MainActor in
                 // Only run if not currently running and ensure we're on main thread
                 guard !backupManager.isRunning else { return }
+                logManager.log("⏰ Periodic backup timer triggered", level: .debug)
                 await backupManager.runBackup()
             }
         }

@@ -15,10 +15,53 @@ class BackupManager: ObservableObject {
     // Add debouncing to prevent rapid UI updates
     private var statusUpdateTask: Task<Void, Never>?
     
-    // Fixed paths - config and rclone only
-    private let rclonePath = "/usr/local/bin/rclone"
-    private let configPath = "/Users/danielfeddersen/.config/rclone/rclone.conf"
-    // Source path now comes from settings!
+    // FIXED: Dynamic paths instead of hardcoded ones
+    private var rclonePath: String {
+        // Try common locations for rclone
+        let possiblePaths = [
+            "/usr/local/bin/rclone",
+            "/opt/homebrew/bin/rclone",
+            "/usr/bin/rclone"
+        ]
+        
+        for path in possiblePaths {
+            if FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        }
+        
+        // If not found in common locations, try using 'which' command
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        task.arguments = ["rclone"]
+        
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        
+        do {
+            try task.run()
+            task.waitUntilExit()
+            
+            if task.terminationStatus == 0 {
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                if let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !path.isEmpty {
+                    return path
+                }
+            }
+        } catch {
+            logManager.log("Failed to find rclone path: \(error)", level: .error)
+        }
+        
+        // Fallback to default
+        return "/usr/local/bin/rclone"
+    }
+    
+    private var configPath: String {
+        // Use user's home directory instead of hardcoded path
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(homeDirectory)/.config/rclone/rclone.conf"
+    }
     
     init(modelContainer: ModelContainer, logManager: LogManager) {
         self.dataActor = BackupDataActor(modelContainer: modelContainer)
@@ -30,162 +73,184 @@ class BackupManager: ObservableObject {
     
     // MARK: - Main Backup Function
     
-    // MARK: - Updated Main Backup Function with Safe UI Updates
+    func runBackup(force: Bool = false) async {
+        // ADDED: More detailed logging to debug the issue
+        logManager.log("🚀 runBackup called with force=\(force)", level: .info)
         
-        func runBackup(force: Bool = false) async {
-            // Ensure we're on main actor for UI updates
+        // Ensure we're on main actor for UI updates
+        await MainActor.run {
+            guard !isRunning else {
+                logManager.log("Backup already in progress, skipping", level: .warning)
+                return
+            }
+            
+            logManager.log("Backup requested (force: \(force))", level: .debug)
+            isRunning = true
+        }
+        
+        // ADDED: Check if external tools exist
+        if !FileManager.default.fileExists(atPath: rclonePath) {
+            logManager.log("❌ rclone not found at: \(rclonePath)", level: .error)
             await MainActor.run {
-                guard !isRunning else {
-                    logManager.log("Backup already in progress, skipping", level: .warning)
+                currentStatus = .failed
+                isRunning = false
+            }
+            return
+        }
+        
+        // Update status safely
+        updateStatus(.running, debounce: false)
+        
+        // Get or create settings
+        let settings = await dataActor.getOrCreateSettings()
+        
+        // Check if configuration is valid before proceeding
+        let validation = settings.validateConfiguration()
+        guard validation.isValid else {
+            let errorMessage = "Configuration incomplete: " + validation.errors.joined(separator: ", ")
+            logManager.log(errorMessage, level: .error)
+            
+            await MainActor.run {
+                currentStatus = .failed
+                isRunning = false
+                lastBackupTime = Date()
+            }
+            updateStatus(.failed)
+            return
+        }
+        
+        // ADDED: More detailed logging
+        logManager.log("✅ Configuration valid, proceeding with backup", level: .info)
+        logManager.log("📁 Source: \(settings.fullSourcePath)", level: .info)
+        logManager.log("🎯 Remote type: \(settings.remoteType.displayName)", level: .info)
+        
+        if !force {
+            // Check schedule for regular backup
+            if let lastSuccess = settings.lastSuccessfulBackup {
+                let hoursSince = Date().timeIntervalSince(lastSuccess) / 3600
+                if hoursSince < Double(settings.backupIntervalHours) {
+                    await MainActor.run {
+                        currentStatus = .skipped
+                        isRunning = false
+                        lastBackupTime = Date()
+                    }
+                    updateStatus(.skipped)
+                    logManager.log("Backup skipped - only \(String(format: "%.1f", hoursSince)) hours since last backup (interval: \(settings.backupIntervalHours) hours)", level: .info)
                     return
                 }
-                
-                logManager.log("Backup requested (force: \(force))", level: .debug)
-                isRunning = true
             }
-            
-            // Update status safely
-            updateStatus(.running, debounce: false)
-            
-            // Get or create settings
-            let settings = await dataActor.getOrCreateSettings()
-            
-            // Check if configuration is valid before proceeding
-            let validation = settings.validateConfiguration()
-            guard validation.isValid else {
-                let errorMessage = "Configuration incomplete: " + validation.errors.joined(separator: ", ")
-                logManager.log(errorMessage, level: .error)
-                
-                await MainActor.run {
-                    currentStatus = .failed
-                    isRunning = false
-                    lastBackupTime = Date()
-                }
-                updateStatus(.failed)
-                return
-            }
-            
-            if !force {
-                // Check schedule for regular backup
-                if let lastSuccess = settings.lastSuccessfulBackup {
-                    let hoursSince = Date().timeIntervalSince(lastSuccess) / 3600
-                    if hoursSince < Double(settings.backupIntervalHours) {
-                        await MainActor.run {
-                            currentStatus = .skipped
-                            isRunning = false
-                            lastBackupTime = Date()
-                        }
-                        updateStatus(.skipped)
-                        logManager.log("Backup skipped - only \(String(format: "%.1f", hoursSince)) hours since last backup (interval: \(settings.backupIntervalHours) hours)", level: .info)
-                        return
-                    }
-                }
-                logManager.log("Scheduled backup proceeding", level: .info)
-            } else {
-                logManager.log("Force backup requested - bypassing schedule check", level: .info)
-            }
-            
-            logManager.log("Starting backup process", level: .info)
-            
-            do {
-                // Create backup session
-                let session = await dataActor.createBackupSession()
-                let sessionID = session.persistentModelID
-                
-                logManager.log("Backing up from: \(settings.fullSourcePath)", level: .info)
-                
-                // Perform backup based on remote type
-                let result: (success: Bool, error: String?, filesCount: Int, totalSize: Int64)
-                
-                switch settings.remoteType {
-                case .local:
-                    result = await performLocalBackup(settings)
-                case .webdav:
-                    // Write rclone config and test connection first
-                    try await writeRcloneConfig(settings)
-                    
-                    let isConnected = await testConnection(settings)
-                    updateConnectionStatus(isConnected ? .connected : .failed)
-                    
-                    guard isConnected else {
-                        throw BackupError.connectionFailed
-                    }
-                    
-                    result = await performRcloneBackup(settings)
-                default:
-                    throw BackupError.backupFailed("Remote type \(settings.remoteType.rawValue) not yet implemented")
-                }
-                
-                if result.success {
-                    try await dataActor.updateSession(sessionID,
-                                                    success: true,
-                                                    error: nil,
-                                                    filesCount: result.filesCount,
-                                                    totalSize: result.totalSize)
-                    try await dataActor.updateLastSuccessfulBackup()
-                    
-                    await MainActor.run {
-                        currentStatus = .success
-                        isRunning = false
-                        lastBackupTime = Date()
-                    }
-                    updateStatus(.success)
-                    logManager.log("Backup completed successfully", level: .info)
-                } else {
-                    try await dataActor.updateSession(sessionID,
-                                                    success: false,
-                                                    error: result.error,
-                                                    filesCount: 0,
-                                                    totalSize: 0)
-                    await MainActor.run {
-                        currentStatus = .failed
-                        isRunning = false
-                        lastBackupTime = Date()
-                    }
-                    updateStatus(.failed)
-                    logManager.log("Backup failed: \(result.error ?? "Unknown error")", level: .error)
-                }
-                
-            } catch {
-                logManager.log("Backup error: \(error)", level: .error)
-                await MainActor.run {
-                    currentStatus = .failed
-                    isRunning = false
-                    lastBackupTime = Date()
-                }
-                updateStatus(.failed)
-            }
+            logManager.log("Scheduled backup proceeding", level: .info)
+        } else {
+            logManager.log("🔥 Force backup requested - bypassing schedule check", level: .info)
         }
-    
-    // MARK: - Connection Testing
-    
-    // MARK: - Updated Connection Testing with Safe UI Updates
         
-        func runConnectionTest() async {
-            logManager.log("Starting connection test", level: .info)
-            updateConnectionStatus(.testing)
+        logManager.log("Starting backup process", level: .info)
+        
+        do {
+            // Create backup session
+            let session = await dataActor.createBackupSession()
+            let sessionID = session.persistentModelID
             
-            guard let settings = await dataActor.getSettings() else {
-                updateConnectionStatus(.failed)
-                logManager.log("No settings found for connection test", level: .error)
-                return
-            }
+            logManager.log("📦 Created backup session: \(sessionID)", level: .debug)
             
-            let isConnected: Bool
+            // Perform backup based on remote type
+            let result: (success: Bool, error: String?, filesCount: Int, totalSize: Int64)
             
             switch settings.remoteType {
             case .local:
-                isConnected = await testLocalConnection(settings)
+                logManager.log("🏠 Starting local backup", level: .info)
+                result = await performLocalBackup(settings)
             case .webdav:
-                isConnected = await testConnection(settings)
+                logManager.log("☁️ Starting WebDAV backup", level: .info)
+                // Write rclone config and test connection first
+                do {
+                    try await writeRcloneConfig(settings)
+                    logManager.log("📝 rclone config written", level: .debug)
+                } catch {
+                    logManager.log("❌ Failed to write rclone config: \(error)", level: .error)
+                    throw BackupError.backupFailed("Failed to write rclone config: \(error)")
+                }
+                
+                let isConnected = await testConnection(settings)
+                updateConnectionStatus(isConnected ? .connected : .failed)
+                
+                guard isConnected else {
+                    throw BackupError.connectionFailed
+                }
+                
+                result = await performRcloneBackup(settings)
             default:
-                isConnected = false
-                logManager.log("Connection test not implemented for \(settings.remoteType.displayName)", level: .error)
+                throw BackupError.backupFailed("Remote type \(settings.remoteType.rawValue) not yet implemented")
             }
             
-            updateConnectionStatus(isConnected ? .connected : .failed)
-            logManager.log("Connection test result: \(isConnected ? "SUCCESS" : "FAILED")", level: isConnected ? .info : .error)
+            if result.success {
+                try await dataActor.updateSession(sessionID,
+                                                success: true,
+                                                error: nil,
+                                                filesCount: result.filesCount,
+                                                totalSize: result.totalSize)
+                try await dataActor.updateLastSuccessfulBackup()
+                
+                await MainActor.run {
+                    currentStatus = .success
+                    isRunning = false
+                    lastBackupTime = Date()
+                }
+                updateStatus(.success)
+                logManager.log("✅ Backup completed successfully: \(result.filesCount) files, \(ByteCountFormatter.string(fromByteCount: result.totalSize, countStyle: .file))", level: .info)
+            } else {
+                try await dataActor.updateSession(sessionID,
+                                                success: false,
+                                                error: result.error,
+                                                filesCount: 0,
+                                                totalSize: 0)
+                await MainActor.run {
+                    currentStatus = .failed
+                    isRunning = false
+                    lastBackupTime = Date()
+                }
+                updateStatus(.failed)
+                logManager.log("❌ Backup failed: \(result.error ?? "Unknown error")", level: .error)
+            }
+            
+        } catch {
+            logManager.log("💥 Backup error: \(error)", level: .error)
+            await MainActor.run {
+                currentStatus = .failed
+                isRunning = false
+                lastBackupTime = Date()
+            }
+            updateStatus(.failed)
         }
+    }
+    
+    // MARK: - Connection Testing
+    
+    func runConnectionTest() async {
+        logManager.log("Starting connection test", level: .info)
+        updateConnectionStatus(.testing)
+        
+        guard let settings = await dataActor.getSettings() else {
+            updateConnectionStatus(.failed)
+            logManager.log("No settings found for connection test", level: .error)
+            return
+        }
+        
+        let isConnected: Bool
+        
+        switch settings.remoteType {
+        case .local:
+            isConnected = await testLocalConnection(settings)
+        case .webdav:
+            isConnected = await testConnection(settings)
+        default:
+            isConnected = false
+            logManager.log("Connection test not implemented for \(settings.remoteType.displayName)", level: .error)
+        }
+        
+        updateConnectionStatus(isConnected ? .connected : .failed)
+        logManager.log("Connection test result: \(isConnected ? "SUCCESS" : "FAILED")", level: isConnected ? .info : .error)
+    }
     
     // MARK: - Local Backup Operations
     
@@ -293,9 +358,16 @@ class BackupManager: ObservableObject {
     }
     
     private func runRsyncCommand(from source: String, to destination: String, delete: Bool, excludePatterns: [String] = []) async -> (success: Bool, error: String?) {
+        // ADDED: Check if rsync exists
+        let rsyncPath = "/usr/bin/rsync"
+        guard FileManager.default.fileExists(atPath: rsyncPath) else {
+            logManager.log("❌ rsync not found at: \(rsyncPath)", level: .error)
+            return (false, "rsync not found")
+        }
+        
         return await withCheckedContinuation { continuation in
             let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/rsync")
+            task.executableURL = URL(fileURLWithPath: rsyncPath)
             
             var arguments = [
                 "-avh",  // archive, verbose, human-readable
@@ -318,6 +390,7 @@ class BackupManager: ObservableObject {
             task.standardError = errorPipe
             
             do {
+                logManager.log("🔧 Running rsync: \(arguments.joined(separator: " "))", level: .debug)
                 try task.run()
                 task.waitUntilExit()
                 
@@ -326,9 +399,11 @@ class BackupManager: ObservableObject {
                 } else {
                     let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                     let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                    logManager.log("❌ rsync failed with code \(task.terminationStatus): \(errorOutput)", level: .error)
                     continuation.resume(returning: (false, errorOutput))
                 }
             } catch {
+                logManager.log("❌ rsync execution error: \(error)", level: .error)
                 continuation.resume(returning: (false, error.localizedDescription))
             }
         }
@@ -575,6 +650,12 @@ class BackupManager: ObservableObject {
     }
     
     private func runRcloneCommand(_ arguments: [String]) async -> (success: Bool, error: String?) {
+        // ADDED: Check if rclone exists before running
+        guard FileManager.default.fileExists(atPath: rclonePath) else {
+            logManager.log("❌ rclone not found at: \(rclonePath)", level: .error)
+            return (false, "rclone not found at \(rclonePath)")
+        }
+        
         return await withCheckedContinuation { continuation in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: rclonePath)
@@ -588,6 +669,7 @@ class BackupManager: ObservableObject {
             task.standardError = errorPipe
             
             do {
+                logManager.log("🔧 Running rclone: \(arguments.joined(separator: " "))", level: .debug)
                 try task.run()
                 task.waitUntilExit()
                 
@@ -596,9 +678,11 @@ class BackupManager: ObservableObject {
                 } else {
                     let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                     let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                    logManager.log("❌ rclone failed with code \(task.terminationStatus): \(errorOutput)", level: .error)
                     continuation.resume(returning: (false, errorOutput))
                 }
             } catch {
+                logManager.log("❌ rclone execution error: \(error)", level: .error)
                 continuation.resume(returning: (false, error.localizedDescription))
             }
         }
@@ -620,35 +704,35 @@ class BackupManager: ObservableObject {
         
         // Write config
         try configContent.write(toFile: configPath, atomically: true, encoding: .utf8)
-        logManager.log("Updated rclone configuration", level: .debug)
+        logManager.log("Updated rclone configuration at: \(configPath)", level: .debug)
     }
     
     // MARK: - Safe UI Updates
         
-        private func updateStatus(_ status: BackupStatus, debounce: Bool = true) {
-            // Cancel previous update if debouncing
-            if debounce {
-                statusUpdateTask?.cancel()
-            }
-            
-            statusUpdateTask = Task { @MainActor in
-                if debounce {
-                    // Small delay to prevent rapid updates
-                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                    if Task.isCancelled { return }
-                }
-                
-                self.currentStatus = status
-                self.logManager.updateBackupStatus(status)
-            }
+    private func updateStatus(_ status: BackupStatus, debounce: Bool = true) {
+        // Cancel previous update if debouncing
+        if debounce {
+            statusUpdateTask?.cancel()
         }
         
-        private func updateConnectionStatus(_ status: ConnectionStatus) {
-            Task { @MainActor in
-                self.connectionStatus = status
-                self.lastConnectionTestTime = Date()
+        statusUpdateTask = Task { @MainActor in
+            if debounce {
+                // Small delay to prevent rapid updates
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                if Task.isCancelled { return }
             }
+            
+            self.currentStatus = status
+            self.logManager.updateBackupStatus(status)
         }
+    }
+        
+    private func updateConnectionStatus(_ status: ConnectionStatus) {
+        Task { @MainActor in
+            self.connectionStatus = status
+            self.lastConnectionTestTime = Date()
+        }
+    }
     
     // MARK: - Helper Methods
     
@@ -664,6 +748,7 @@ class BackupManager: ObservableObject {
     // MARK: - Public Helper Methods
     
     func runForceBackup() async {
+        logManager.log("🚀 Force backup initiated", level: .info)
         await runBackup(force: true)
     }
     
@@ -695,6 +780,8 @@ class BackupManager: ObservableObject {
         logManager.log("📁 Source: \(settings.fullSourcePath)", level: .debug)
         logManager.log("📁 Source exists: \(settings.sourceExists)", level: .debug)
         logManager.log("📁 Source readable: \(settings.sourceIsReadable)", level: .debug)
+        logManager.log("🔧 rclone path: \(rclonePath)", level: .debug)
+        logManager.log("📋 Config path: \(configPath)", level: .debug)
         
         switch settings.remoteType {
         case .local:
@@ -717,6 +804,8 @@ class BackupManager: ObservableObject {
         logManager.log("🔧 Current configuration:", level: .info)
         logManager.log("Remote Type: \(settings.remoteType.displayName)", level: .debug)
         logManager.log("Source Path: \(settings.fullSourcePath)", level: .debug)
+        logManager.log("rclone Path: \(rclonePath)", level: .debug)
+        logManager.log("Config Path: \(configPath)", level: .debug)
         
         if let sourceInfo = settings.getSourceInfo() {
             logManager.log("Source contains: \(sourceInfo.fileCount) files, \(ByteCountFormatter.string(fromByteCount: sourceInfo.totalSize, countStyle: .file))", level: .debug)

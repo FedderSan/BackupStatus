@@ -71,6 +71,10 @@ struct BackupStatusApp: App {
         Window("Backup Log", id: "log") {
             LogView(logManager: logManager)
         }
+        // In BackupStatusApp.swift, add this window:
+           Window("Debug", id: "debug") {
+               DebugView()
+           }
         .windowResizability(.contentSize)
         .defaultSize(width: 800, height: 600)
     }
