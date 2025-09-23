@@ -513,6 +513,9 @@ class BackupManager: ObservableObject {
                         // Don't fail the whole backup if versioning fails
                     }
                 }
+                
+                // NEW: Clean up old versions after creating new one
+                await cleanupOldVersions(settings)
             }
             
             // Get backup stats from latest folder
@@ -524,6 +527,100 @@ class BackupManager: ObservableObject {
         } catch {
             return (false, "Failed to create backup directories: \(error.localizedDescription)", 0, 0)
         }
+    }
+    
+    // MARK: - NEW: Version Cleanup Implementation
+
+    private func cleanupOldVersions(_ settings: BackupSettings) async {
+        guard settings.shouldCleanupVersions() else {
+            logManager.log("🗂️ Version cleanup disabled - keeping all versions", level: .debug)
+            return
+        }
+        
+        let versionsToDelete = settings.getVersionsToCleanup()
+        guard !versionsToDelete.isEmpty else {
+            let existingCount = settings.getExistingVersions().count
+            let maxVersions = settings.backupVersionRetention.rawValue
+            logManager.log("🗂️ Version cleanup: \(existingCount)/\(maxVersions) versions - no cleanup needed", level: .debug)
+            return
+        }
+        
+        let versionsDir = settings.versionsDirectoryPath()
+        var deletedCount = 0
+        var failedCount = 0
+        
+        logManager.log("🗑️ Cleaning up \(versionsToDelete.count) old backup versions", level: .info)
+        
+        for versionName in versionsToDelete {
+            let versionPath = "\(versionsDir)/\(versionName)"
+            
+            do {
+                // Get size before deletion for reporting
+                let attributes = try FileManager.default.attributesOfItem(atPath: versionPath)
+                let size = attributes[.size] as? Int64 ?? 0
+                
+                // Delete the version directory
+                try FileManager.default.removeItem(atPath: versionPath)
+                
+                deletedCount += 1
+                logManager.log("🗑️ Deleted version: \(versionName) (\(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)))", level: .debug)
+                
+            } catch {
+                failedCount += 1
+                logManager.log("❌ Failed to delete version \(versionName): \(error)", level: .error)
+            }
+        }
+        
+        let remainingCount = settings.getExistingVersions().count
+        let retentionLimit = settings.backupVersionRetention.rawValue
+        
+        if deletedCount > 0 {
+            logManager.log("✅ Version cleanup completed: deleted \(deletedCount) versions, \(remainingCount) remaining (limit: \(retentionLimit))", level: .info)
+        }
+        
+        if failedCount > 0 {
+            logManager.log("⚠️ Version cleanup had \(failedCount) failures", level: .warning)
+        }
+    }
+
+    // MARK: - Manual Cleanup Method (for settings or manual triggers)
+
+    func cleanupOldVersionsManually() async {
+        let settings = await dataActor.getOrCreateSettings()
+        
+        logManager.log("🧹 Manual version cleanup requested", level: .info)
+        logManager.log("📋 Current retention setting: \(settings.backupVersionRetention.displayName)", level: .info)
+        
+        await cleanupOldVersions(settings)
+    }
+
+    // MARK: - Version Statistics (for UI/debugging)
+
+    func getVersionStatistics() async -> (totalVersions: Int, totalSize: Int64, oldestVersion: String?, newestVersion: String?) {
+        let settings = await dataActor.getOrCreateSettings()
+        let existingVersions = settings.getExistingVersions()
+        
+        guard !existingVersions.isEmpty else {
+            return (0, 0, nil, nil)
+        }
+        
+        let versionsDir = settings.versionsDirectoryPath()
+        var totalSize: Int64 = 0
+        
+        for versionName in existingVersions {
+            let versionPath = "\(versionsDir)/\(versionName)"
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: versionPath),
+               let size = attributes[.size] as? Int64 {
+                totalSize += size
+            }
+        }
+        
+        return (
+            totalVersions: existingVersions.count,
+            totalSize: totalSize,
+            oldestVersion: existingVersions.first,
+            newestVersion: existingVersions.last
+        )
     }
     
     private func runHardLinkCopy(from source: String, to destination: String) async -> (success: Bool, error: String?) {

@@ -14,7 +14,7 @@ struct PreferencesView: View {
     @State private var launchAtLogin = false
     @State private var autoStartError = ""
     
-    // Source fields (NEW)
+    // Source fields
     @State private var sourcePath = ""
     @State private var excludePatterns = ""
     
@@ -32,6 +32,10 @@ struct PreferencesView: View {
     // Local fields
     @State private var localDestinationPath = ""
     @State private var localCreateDatedFolders = true
+    
+    // NEW: Retention settings
+    @State private var logRetentionPeriod: LogRetentionPeriod = .days30
+    @State private var backupVersionRetention: BackupVersionRetention = .versions14
     
     @State private var showingPassword = false
     @State private var testResult = ""
@@ -157,6 +161,89 @@ struct PreferencesView: View {
                         .padding()
                     }
                     
+                    // NEW: Data Management Settings
+                    GroupBox("Data Management") {
+                        VStack(spacing: 16) {
+                            // Log Retention Settings
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Log Retention")
+                                    .font(.headline)
+                                
+                                HStack {
+                                    Text("Keep logs for:")
+                                        .frame(width: 120, alignment: .trailing)
+                                    
+                                    Picker("Log Retention", selection: $logRetentionPeriod) {
+                                        ForEach(LogRetentionPeriod.allCases, id: \.self) { period in
+                                            Text(period.displayName).tag(period)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .frame(width: 120)
+                                    
+                                    Spacer()
+                                }
+                                
+                                Text(logRetentionPeriod.description)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Divider()
+                            
+                            // Backup Version Retention Settings
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Backup Version Retention")
+                                    .font(.headline)
+                                
+                                HStack {
+                                    Text("Keep versions:")
+                                        .frame(width: 120, alignment: .trailing)
+                                    
+                                    Picker("Version Retention", selection: $backupVersionRetention) {
+                                        ForEach(BackupVersionRetention.allCases, id: \.self) { retention in
+                                            Text(retention.displayName).tag(retention)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .frame(width: 140)
+                                    
+                                    Spacer()
+                                }
+                                
+                                Text(backupVersionRetention.description)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                // Version cleanup preview
+                                if backupVersionRetention.shouldCleanup {
+                                    HStack {
+                                        Image(systemName: "info.circle")
+                                            .foregroundColor(.blue)
+                                        Text("Older backup versions will be automatically deleted after each backup")
+                                            .font(.caption)
+                                            .foregroundColor(.blue)
+                                    }
+                                    .padding(8)
+                                    .background(Color.blue.opacity(0.1))
+                                    .cornerRadius(4)
+                                } else {
+                                    HStack {
+                                        Image(systemName: "exclamationmark.triangle")
+                                            .foregroundColor(.orange)
+                                        Text("All backup versions will be kept - monitor disk space usage")
+                                            .font(.caption)
+                                            .foregroundColor(.orange)
+                                    }
+                                    .padding(8)
+                                    .background(Color.orange.opacity(0.1))
+                                    .cornerRadius(4)
+                                }
+                            }
+                        }
+                        .padding()
+                    }
+                    
                     //login item
                     GroupBox("Startup Options") {
                         VStack(spacing: 12) {
@@ -185,6 +272,7 @@ struct PreferencesView: View {
                         }
                         .padding()
                     }
+                    
                     // Local Configuration
                     if remoteType == .local {
                         GroupBox("Local/Network Drive Configuration") {
@@ -209,7 +297,7 @@ struct PreferencesView: View {
                                         Text("Backup structure:")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
-                                        Text("Daily: \(localDestinationPath)/daily/\(DateFormatter.dailyFormat.string(from: Date()))")
+                                        Text("Latest: \(localDestinationPath)/latest")
                                             .font(.system(.caption, design: .monospaced))
                                         Text("Versions: \(localDestinationPath)/versions/\(DateFormatter.versionFormat.string(from: Date()))")
                                             .font(.system(.caption, design: .monospaced))
@@ -424,7 +512,7 @@ struct PreferencesView: View {
         .frame(minWidth: 700, idealWidth: 800, maxWidth: 1200, minHeight: 600, idealHeight: 700, maxHeight: 1000)
         .onAppear {
             loadSettings()
-            loadAutoStartSettings() // Add this line
+            loadAutoStartSettings()
         }
     }
     
@@ -603,6 +691,10 @@ struct PreferencesView: View {
         // Local fields
         localDestinationPath = settings.localDestinationPath
         localCreateDatedFolders = settings.localCreateDatedFolders
+        
+        // NEW: Retention settings
+        logRetentionPeriod = settings.logRetentionPeriod
+        backupVersionRetention = settings.backupVersionRetention
     }
     
     private func resetToDefaults() {
@@ -645,6 +737,10 @@ struct PreferencesView: View {
             // Update local settings
             settings.localDestinationPath = localDestinationPath
             settings.localCreateDatedFolders = localCreateDatedFolders
+            
+            // NEW: Update retention settings
+            settings.logRetentionPeriod = logRetentionPeriod
+            settings.backupVersionRetention = backupVersionRetention
             
             // Save password for WebDAV
             if remoteType == .webdav && !webdavPassword.isEmpty {

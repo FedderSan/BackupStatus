@@ -30,8 +30,11 @@ class BackupSettings {
     var remoteName: String
     var remoteType: RemoteType
     
-    // Log Management Settings (NEW)
+    // Log Management Settings
     var logRetentionDays: Int  // Store as int for SwiftData compatibility
+    
+    // NEW: Backup Version Management Settings
+    var backupVersionRetentionCount: Int  // Store as int for SwiftData compatibility
     
     var logRetentionPeriod: LogRetentionPeriod {
         get {
@@ -39,6 +42,15 @@ class BackupSettings {
         }
         set {
             logRetentionDays = newValue.rawValue
+        }
+    }
+    
+    var backupVersionRetention: BackupVersionRetention {
+        get {
+            return BackupVersionRetention(rawValue: backupVersionRetentionCount) ?? .versions14
+        }
+        set {
+            backupVersionRetentionCount = newValue.rawValue
         }
     }
     
@@ -69,8 +81,9 @@ class BackupSettings {
         self.remoteName = "backup-remote"
         self.remoteType = .local  // Default to local now
         
-        // Log retention defaults (NEW)
+        // Retention defaults
         self.logRetentionDays = LogRetentionPeriod.days30.rawValue
+        self.backupVersionRetentionCount = BackupVersionRetention.versions14.rawValue  // NEW: Default to 14 versions
     }
     
     // MARK: - Source Path Helpers
@@ -182,6 +195,46 @@ class BackupSettings {
             // If versioning is disabled, only update latest
             return localLatestPath()
         }
+    }
+    
+    // MARK: - NEW: Version Management Helpers
+    
+    func versionsDirectoryPath() -> String {
+        return "\(fullLocalDestinationPath)/versions"
+    }
+    
+    func getExistingVersions() -> [String] {
+        let versionsDir = versionsDirectoryPath()
+        
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: versionsDir) else {
+            return []
+        }
+        
+        // Filter and sort version directories (assuming they're date-formatted)
+        return contents
+            .filter { item in
+                var isDirectory: ObjCBool = false
+                let fullPath = "\(versionsDir)/\(item)"
+                return FileManager.default.fileExists(atPath: fullPath, isDirectory: &isDirectory) && isDirectory.boolValue
+            }
+            .sorted() // This will sort lexicographically, which works for our date format
+    }
+    
+    func shouldCleanupVersions() -> Bool {
+        return backupVersionRetention.shouldCleanup
+    }
+    
+    func getVersionsToCleanup() -> [String] {
+        guard shouldCleanupVersions() else { return [] }
+        
+        let existingVersions = getExistingVersions()
+        let maxVersions = backupVersionRetention.rawValue
+        
+        guard existingVersions.count > maxVersions else { return [] }
+        
+        // Return the oldest versions to delete (keep the newest ones)
+        let versionsToDelete = existingVersions.count - maxVersions
+        return Array(existingVersions.prefix(versionsToDelete))
     }
     
     // MARK: - rclone Configuration

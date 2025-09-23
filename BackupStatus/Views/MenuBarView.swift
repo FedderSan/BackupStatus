@@ -129,53 +129,92 @@ struct MenuBarView: View {
                 safeOpenWindow("settings")
             }
             
-            #if DEBUG
-            Divider()
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Debug Tools")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                Button("🔍 Debug Connection") {
-                    Task { @MainActor in
-                        await backupManager.debugConnection()
-                    }
+#if DEBUG
+Divider()
+
+VStack(alignment: .leading, spacing: 2) {
+    Text("Debug Tools")
+        .font(.caption)
+        .foregroundColor(.secondary)
+    
+    Button("🔍 Debug Connection") {
+        Task { @MainActor in
+            await backupManager.debugConnection()
+        }
+    }
+    .disabled(!backupManager.isInitialized)
+    
+    Button("🔧 Debug rclone Config") {
+        Task { @MainActor in
+            await backupManager.debugRcloneConfig()
+        }
+    }
+    .disabled(!backupManager.isInitialized)
+    
+    Button("🔐 Debug Password") {
+        Task { @MainActor in
+            await backupManager.debugPasswordHandling()
+        }
+    }
+    .disabled(!backupManager.isInitialized)
+    
+    Button("📊 Run Diagnostics") {
+        Task { @MainActor in
+            await backupManager.runStartupDiagnostics()
+        }
+    }
+    .disabled(!backupManager.isInitialized)
+    
+    // NEW: Version Management Debug Tools
+    Divider()
+    
+    VStack(alignment: .leading, spacing: 2) {
+        Text("Version Management")
+            .font(.caption2)
+            .foregroundColor(.secondary)
+        
+        Button("📈 Version Stats") {
+            Task { @MainActor in
+                let stats = await backupManager.getVersionStatistics()
+                logManager.log("🗂️ Version Statistics:", level: .info)
+                logManager.log("  Total versions: \(stats.totalVersions)", level: .info)
+                logManager.log("  Total size: \(ByteCountFormatter.string(fromByteCount: stats.totalSize, countStyle: .file))", level: .info)
+                if let oldest = stats.oldestVersion {
+                    logManager.log("  Oldest: \(oldest)", level: .info)
                 }
-                .disabled(!backupManager.isInitialized)
-                
-                Button("🔧 Debug rclone Config") {
-                    Task { @MainActor in
-                        await backupManager.debugRcloneConfig()
-                    }
-                }
-                .disabled(!backupManager.isInitialized)
-                
-                Button("🔐 Debug Password") {
-                    Task { @MainActor in
-                        await backupManager.debugPasswordHandling()
-                    }
-                }
-                .disabled(!backupManager.isInitialized)
-                
-                Button("📊 Run Diagnostics") {
-                    Task { @MainActor in
-                        await backupManager.runStartupDiagnostics()
-                    }
-                }
-                .disabled(!backupManager.isInitialized)
-                
-                Button("🧹 Clean Old Logs") {
-                    Task { @MainActor in
-                        await logManager.forceCleanOldLogs()
-                    }
-                }
-                
-                Button("Debug Tools") {
-                    safeOpenWindow("debug")
+                if let newest = stats.newestVersion {
+                    logManager.log("  Newest: \(newest)", level: .info)
                 }
             }
-            #endif
+        }
+        .disabled(!backupManager.isInitialized)
+        
+        Button("🗑️ Clean Old Versions") {
+            Task { @MainActor in
+                await backupManager.cleanupOldVersionsManually()
+            }
+        }
+        .disabled(!backupManager.isInitialized)
+    }
+    
+    // Log Management Debug Tools
+    VStack(alignment: .leading, spacing: 2) {
+        Text("Log Management")
+            .font(.caption2)
+            .foregroundColor(.secondary)
+        
+        Button("🧹 Clean Old Logs") {
+            Task { @MainActor in
+                await logManager.forceCleanOldLogs()
+            }
+        }
+    }
+    
+    Button("Debug Tools") {
+        safeOpenWindow("debug")
+    }
+}
+#endif
             
             Divider()
             
