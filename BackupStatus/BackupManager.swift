@@ -12,6 +12,10 @@ class BackupManager: ObservableObject {
     private let dataActor: BackupDataActor
     private let logManager: LogManager
     
+    // Add initialization state tracking
+    @Published var isInitialized = false
+    private var initializationTask: Task<Void, Never>?
+    
     // Add debouncing to prevent rapid UI updates
     private var statusUpdateTask: Task<Void, Never>?
     
@@ -66,14 +70,205 @@ class BackupManager: ObservableObject {
     init(modelContainer: ModelContainer, logManager: LogManager) {
         self.dataActor = BackupDataActor(modelContainer: modelContainer)
         self.logManager = logManager
-        Task {
-            await loadLastBackupStatus()
+        
+        // Initialize asynchronously with proper error handling
+        initializationTask = Task { @MainActor in
+            await performInitialization()
         }
+    }
+    
+    deinit {
+        initializationTask?.cancel()
+        statusUpdateTask?.cancel()
+    }
+    
+    // MARK: - Enhanced Initialization
+    
+    private func performInitialization() async {
+        logManager.log("🚀 BackupManager initialization started", level: .info)
+        
+        do {
+            // Step 1: Verify database connection
+            await verifyDatabaseConnection()
+            
+            // Step 2: Load last backup status
+            await loadLastBackupStatus()
+            
+            // Step 3: Verify external tools
+            await verifyExternalTools()
+            
+            // Step 4: Load settings and validate
+            await loadAndValidateSettings()
+            
+            isInitialized = true
+            logManager.log("✅ BackupManager initialization completed successfully", level: .info)
+            
+        } catch {
+            logManager.log("❌ BackupManager initialization failed: \(error)", level: .error)
+            // Continue with partial initialization
+            isInitialized = true
+        }
+    }
+    
+    private func verifyDatabaseConnection() async {
+        logManager.log("📊 Verifying database connection...", level: .debug)
+        
+        do {
+            // Test basic database operations
+            let recentCount = await dataActor.getRecentSessions(limit: 5).count
+            logManager.log("📊 Database connection OK - found \(recentCount) recent sessions", level: .debug)
+            
+            // Ensure settings exist
+            let _ = await dataActor.getOrCreateSettings()
+            logManager.log("📊 Settings table verified", level: .debug)
+            
+        } catch {
+            logManager.log("❌ Database connection issue: \(error)", level: .error)
+            throw error
+        }
+    }
+    
+    func loadLastBackupStatus() async {
+        logManager.log("📋 Loading last backup status...", level: .debug)
+        
+        let recent = await dataActor.getRecentSessions(limit: 1)
+        if let last = recent.first {
+            currentStatus = last.status
+            lastBackupTime = last.endTime ?? last.startTime
+            logManager.updateBackupStatus(last.status)
+            
+            let timeAgo = lastBackupTime.map { Date().timeIntervalSince($0) / 3600 } ?? 0
+            logManager.log("📋 Last backup: \(last.status.rawValue) (\(String(format: "%.1f", timeAgo)) hours ago)", level: .info)
+        } else {
+            logManager.log("📋 No previous backups found", level: .info)
+        }
+    }
+    
+    private func verifyExternalTools() async {
+        logManager.log("🔧 Verifying external tools...", level: .debug)
+        
+        // Check rclone
+        let rcloneExists = FileManager.default.fileExists(atPath: rclonePath)
+        if rcloneExists {
+            logManager.log("✅ rclone found at: \(rclonePath)", level: .debug)
+        } else {
+            logManager.log("⚠️ rclone not found at: \(rclonePath)", level: .warning)
+        }
+        
+        // Check rsync
+        let rsyncPath = "/usr/bin/rsync"
+        let rsyncExists = FileManager.default.fileExists(atPath: rsyncPath)
+        if rsyncExists {
+            logManager.log("✅ rsync found at: \(rsyncPath)", level: .debug)
+        } else {
+            logManager.log("⚠️ rsync not found at: \(rsyncPath)", level: .warning)
+        }
+        
+        // Check curl
+        let curlPath = "/usr/bin/curl"
+        let curlExists = FileManager.default.fileExists(atPath: curlPath)
+        if curlExists {
+            logManager.log("✅ curl found at: \(curlPath)", level: .debug)
+        } else {
+            logManager.log("⚠️ curl not found at: \(curlPath)", level: .warning)
+        }
+    }
+    
+    private func loadAndValidateSettings() async {
+        logManager.log("⚙️ Loading and validating settings...", level: .debug)
+        
+        let settings = await dataActor.getOrCreateSettings()
+        let validation = settings.validateConfiguration()
+        
+        if validation.isValid {
+            logManager.log("✅ Settings configuration is valid", level: .debug)
+            logManager.log("📁 Source: \(settings.fullSourcePath)", level: .debug)
+            logManager.log("🎯 Remote: \(settings.remoteType.displayName)", level: .debug)
+            logManager.log("🗓️ Log retention: \(settings.logRetentionPeriod.displayName)", level: .debug)
+        } else {
+            logManager.log("⚠️ Settings configuration issues found:", level: .warning)
+            for error in validation.errors {
+                logManager.log("  - \(error)", level: .warning)
+            }
+        }
+    }
+    
+    // MARK: - Startup Diagnostics
+    
+    func runStartupDiagnostics() async {
+        logManager.log("🔍 Running startup diagnostics...", level: .info)
+        
+        // Database diagnostics
+        logManager.log("📊 Database diagnostics:", level: .info)
+        let sessionCount = await dataActor.getRecentSessions(limit: 100).count
+        let settings = await dataActor.getSettings()
+        
+        logManager.log("  - Total sessions in database: \(sessionCount)", level: .info)
+        logManager.log("  - Settings configured: \(settings != nil ? "Yes" : "No")", level: .info)
+        
+        if let settings = settings {
+            let validation = settings.validateConfiguration()
+            logManager.log("  - Configuration valid: \(validation.isValid)", level: .info)
+            logManager.log("  - Log retention: \(settings.logRetentionPeriod.displayName)", level: .info)
+            if !validation.isValid {
+                logManager.log("  - Configuration errors: \(validation.errors.joined(separator: ", "))", level: .warning)
+            }
+        }
+        
+        // Log statistics
+        let logStats = await logManager.getLogStatistics()
+        logManager.log("📝 Log diagnostics:", level: .info)
+        logManager.log("  - Total persisted logs: \(logStats.total)", level: .info)
+        if let oldest = logStats.oldestDate, let newest = logStats.newestDate {
+            logManager.log("  - Date range: \(oldest.formatted(date: .abbreviated, time: .shortened)) to \(newest.formatted(date: .abbreviated, time: .shortened))", level: .info)
+        }
+        for (level, count) in logStats.byLevel {
+            logManager.log("  - \(level.displayName): \(count)", level: .info)
+        }
+        
+        // System diagnostics
+        logManager.log("🖥️ System diagnostics:", level: .info)
+        logManager.log("  - App bundle: \(Bundle.main.bundlePath)", level: .info)
+        logManager.log("  - Home directory: \(FileManager.default.homeDirectoryForCurrentUser.path)", level: .info)
+        logManager.log("  - rclone path: \(rclonePath) (exists: \(FileManager.default.fileExists(atPath: rclonePath)))", level: .info)
+        logManager.log("  - Config path: \(configPath)", level: .info)
+        
+        // Application Support directory diagnostics
+        let appSupportURL = URL.applicationSupportDirectory.appendingPathComponent("BackupStatus", isDirectory: true)
+        let databaseURL = appSupportURL.appendingPathComponent("BackupStatus.store")
+        
+        logManager.log("📁 File system diagnostics:", level: .info)
+        logManager.log("  - App Support exists: \(FileManager.default.fileExists(atPath: appSupportURL.path))", level: .info)
+        logManager.log("  - Database exists: \(FileManager.default.fileExists(atPath: databaseURL.path))", level: .info)
+        
+        if FileManager.default.fileExists(atPath: databaseURL.path) {
+            do {
+                let attributes = try FileManager.default.attributesOfItem(atPath: databaseURL.path)
+                if let size = attributes[.size] as? Int64 {
+                    logManager.log("  - Database size: \(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))", level: .info)
+                }
+                if let modDate = attributes[.modificationDate] as? Date {
+                    logManager.log("  - Database last modified: \(modDate.formatted(date: .abbreviated, time: .shortened))", level: .info)
+                }
+            } catch {
+                logManager.log("  - Error reading database attributes: \(error)", level: .error)
+            }
+        }
+        
+        logManager.log("✅ Startup diagnostics completed", level: .info)
     }
     
     // MARK: - Main Backup Function
     
     func runBackup(force: Bool = false) async {
+        // Wait for initialization to complete
+        _ = await initializationTask?.result
+        
+        guard isInitialized else {
+            logManager.log("❌ Cannot run backup: BackupManager not initialized", level: .error)
+            return
+        }
+        
         // ADDED: More detailed logging to debug the issue
         logManager.log("🚀 runBackup called with force=\(force)", level: .info)
         
@@ -731,17 +926,6 @@ class BackupManager: ObservableObject {
         Task { @MainActor in
             self.connectionStatus = status
             self.lastConnectionTestTime = Date()
-        }
-    }
-    
-    // MARK: - Helper Methods
-    
-    func loadLastBackupStatus() async {
-        let recent = await dataActor.getRecentSessions(limit: 1)
-        if let last = recent.first {
-            currentStatus = last.status
-            lastBackupTime = last.endTime ?? last.startTime
-            logManager.updateBackupStatus(last.status)
         }
     }
     

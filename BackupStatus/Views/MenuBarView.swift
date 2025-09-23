@@ -1,4 +1,4 @@
-// MARK: - Complete Fixed MenuBarView with Proper Force Backup Logic
+// MARK: - Complete Fixed MenuBarView with Proper Force Backup Logic and Startup Diagnostics
 import SwiftUI
 import SwiftData
 
@@ -18,6 +18,24 @@ struct MenuBarView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Initialization Status (NEW)
+            if !backupManager.isInitialized {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Initializing...")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                    Text("Loading backup system...")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                Divider()
+            }
+            
             // Backup Status Section
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -72,7 +90,7 @@ struct MenuBarView: View {
                         Text("Run Scheduled Backup")
                     }
                 }
-                .disabled(backupManager.isRunning)
+                .disabled(backupManager.isRunning || !backupManager.isInitialized)
                 .help("Runs backup only if enough time has passed since last backup")
                 
                 Button(action: {
@@ -83,7 +101,7 @@ struct MenuBarView: View {
                         Text("Force Backup Now")
                     }
                 }
-                .disabled(backupManager.isRunning)
+                .disabled(backupManager.isRunning || !backupManager.isInitialized)
                 .help("Immediately runs backup, ignoring schedule and time restrictions")
             }
             
@@ -94,7 +112,7 @@ struct MenuBarView: View {
                     await backupManager.runConnectionTest()
                 }
             }
-            .disabled(backupManager.connectionStatus == .testing)
+            .disabled(backupManager.connectionStatus == .testing || !backupManager.isInitialized)
             
             Divider()
             
@@ -114,26 +132,48 @@ struct MenuBarView: View {
             #if DEBUG
             Divider()
             
-            Button("🔍 Debug Connection") {
-                Task { @MainActor in
-                    await backupManager.debugConnection()
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Debug Tools")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Button("🔍 Debug Connection") {
+                    Task { @MainActor in
+                        await backupManager.debugConnection()
+                    }
                 }
-            }
-            
-            Button("🔧 Debug rclone Config") {
-                Task { @MainActor in
-                    await backupManager.debugRcloneConfig()
+                .disabled(!backupManager.isInitialized)
+                
+                Button("🔧 Debug rclone Config") {
+                    Task { @MainActor in
+                        await backupManager.debugRcloneConfig()
+                    }
                 }
-            }
-            
-            Button("🔐 Debug Password") {
-                Task { @MainActor in
-                    await backupManager.debugPasswordHandling()
+                .disabled(!backupManager.isInitialized)
+                
+                Button("🔐 Debug Password") {
+                    Task { @MainActor in
+                        await backupManager.debugPasswordHandling()
+                    }
                 }
-            }
-            
-            Button("Debug Tools") {
-                safeOpenWindow("debug")
+                .disabled(!backupManager.isInitialized)
+                
+                Button("📊 Run Diagnostics") {
+                    Task { @MainActor in
+                        await backupManager.runStartupDiagnostics()
+                    }
+                }
+                .disabled(!backupManager.isInitialized)
+                
+                Button("🧹 Clean Old Logs") {
+                    Task { @MainActor in
+                        await logManager.forceCleanOldLogs()
+                    }
+                }
+                
+                Button("Debug Tools") {
+                    safeOpenWindow("debug")
+                }
             }
             #endif
             
@@ -181,6 +221,13 @@ struct MenuBarView: View {
         }
         .onAppear {
             startPeriodicBackup()
+            
+            // Run startup diagnostics (NEW)
+            Task {
+                // Wait a moment to let the UI settle
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                await backupManager.runStartupDiagnostics()
+            }
         }
         .onDisappear {
             timer?.invalidate()
@@ -191,6 +238,12 @@ struct MenuBarView: View {
     
     private func runScheduledBackupSafely() {
         logManager.log("🔄 Scheduled backup button clicked", level: .info)
+        
+        guard backupManager.isInitialized else {
+            logManager.log("❌ BackupManager not yet initialized", level: .error)
+            return
+        }
+        
         Task { @MainActor in
             let settings = await backupManager.getOrCreateSettings()
             let validation = settings.validateConfiguration()
@@ -225,6 +278,11 @@ struct MenuBarView: View {
     // FIXED: Force backup should NEVER show confirmations or time checks
     private func runForceBackupSafely() {
         logManager.log("🔥 Force backup button clicked", level: .info)
+        
+        guard backupManager.isInitialized else {
+            logManager.log("❌ BackupManager not yet initialized", level: .error)
+            return
+        }
         
         Task { @MainActor in
             let settings = await backupManager.getOrCreateSettings()
@@ -296,11 +354,14 @@ struct MenuBarView: View {
         // Create new timer with safe execution
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
             Task { @MainActor in
-                // Only run if not currently running and ensure we're on main thread
-                guard !backupManager.isRunning else { return }
+                // Only run if not currently running, initialized, and ensure we're on main thread
+                guard !backupManager.isRunning && backupManager.isInitialized else { return }
                 logManager.log("⏰ Periodic backup timer triggered", level: .debug)
                 await backupManager.runBackup()
             }
         }
+        
+        // Log timer creation for debugging
+        logManager.log("⏰ Periodic backup timer created (5-minute interval)", level: .debug)
     }
 }

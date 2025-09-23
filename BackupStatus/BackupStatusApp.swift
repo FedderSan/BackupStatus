@@ -8,21 +8,51 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - Enhanced App with SwiftData and Safe Window Management
+// MARK: - Application Support Directory Extension
+extension URL {
+    static var applicationSupportDirectory: URL {
+        let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        return paths.first!
+    }
+}
+
+// MARK: - Enhanced App with SwiftData and Persistent Logs
 @main
 struct BackupStatusApp: App {
     let modelContainer: ModelContainer
-    @StateObject private var logManager = LogManager()
+    @StateObject private var logManager: LogManager
     
     init() {
-        // Define schema
-        let schema = Schema([BackupSession.self, BackupSettings.self])
-        let config = ModelConfiguration("Default", schema: schema)
-
+        // Define schema - Include all models for persistence
+        let schema = Schema([
+            BackupSession.self,
+            BackupSettings.self,
+            PersistentLogEntry.self  // Add this for persistent logs
+        ])
+        
+        // Create configuration with explicit store location in Application Support
+        let appSupportURL = URL.applicationSupportDirectory
+            .appendingPathComponent("BackupStatus", isDirectory: true)
+        
+        // Ensure the directory exists
+        do {
+            try FileManager.default.createDirectory(at: appSupportURL, withIntermediateDirectories: true)
+        } catch {
+            print("Failed to create app support directory: \(error)")
+        }
+        
+        let storeURL = appSupportURL.appendingPathComponent("BackupStatus.store")
+        let config = ModelConfiguration(url: storeURL)
+        
+        // DEBUGGING: Print database location
+        print("📁 Database location: \(storeURL.path)")
+        print("📁 App Support directory: \(appSupportURL.path)")
+        
         // COMMENTED OUT: Database deletion code (for development only)
-        // Uncomment the lines below only if you need to reset the database during development
+        // Uncomment ONLY during development if you need to reset the database
+        // WARNING: This will delete all your backup history and settings!
         /*
-        let storeURL = config.url // this gives '.../default.store'
+        print("🗑️ DEVELOPMENT MODE: Deleting existing database files")
         let baseURL = storeURL.deletingPathExtension()
         let extensions = ["store", "store-shm", "store-wal"]
 
@@ -40,10 +70,25 @@ struct BackupStatusApp: App {
         */
         
         do {
-            modelContainer = try ModelContainer(for: BackupSession.self, BackupSettings.self)
+            modelContainer = try ModelContainer(for: schema, configurations: [config])
+            print("✅ ModelContainer created successfully")
+            
+            // Verify database file was created
+            if FileManager.default.fileExists(atPath: storeURL.path) {
+                let attributes = try? FileManager.default.attributesOfItem(atPath: storeURL.path)
+                if let size = attributes?[.size] as? Int64 {
+                    print("📊 Database file size: \(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))")
+                }
+            } else {
+                print("⚠️ Database file does not exist yet (will be created on first write)")
+            }
+            
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")
         }
+        
+        // Create LogManager with modelContainer for persistence
+        self._logManager = StateObject(wrappedValue: LogManager(modelContainer: modelContainer))
     }
     
     var body: some Scene {
@@ -71,10 +116,12 @@ struct BackupStatusApp: App {
         Window("Backup Log", id: "log") {
             LogView(logManager: logManager)
         }
-        // In BackupStatusApp.swift, add this window:
-           Window("Debug", id: "debug") {
-               DebugView()
-           }
+        .windowResizability(.contentSize)
+        .defaultSize(width: 900, height: 600)
+        
+        Window("Debug", id: "debug") {
+            DebugView()
+        }
         .windowResizability(.contentSize)
         .defaultSize(width: 800, height: 600)
     }

@@ -9,7 +9,7 @@ class BackupSettings {
     var backupIntervalHours: Int
     var lastSuccessfulBackup: Date?
     
-    // Source Configuration (NEW)
+    // Source Configuration
     var sourcePath: String
     var excludePatterns: String  // Comma-separated patterns to exclude
     
@@ -30,13 +30,25 @@ class BackupSettings {
     var remoteName: String
     var remoteType: RemoteType
     
+    // Log Management Settings (NEW)
+    var logRetentionDays: Int  // Store as int for SwiftData compatibility
+    
+    var logRetentionPeriod: LogRetentionPeriod {
+        get {
+            return LogRetentionPeriod(rawValue: logRetentionDays) ?? .days30
+        }
+        set {
+            logRetentionDays = newValue.rawValue
+        }
+    }
+    
     init() {
         self.id = UUID()
         self.serverHost = "MiniServer-DF"
         self.serverPort = 8081
         self.backupIntervalHours = 24
         
-        // Source defaults (NEW)
+        // Source defaults
         self.sourcePath = "/Users/danielfeddersen/Library/CloudStorage/OneDrive-Personal/workOnedrive"
         self.excludePatterns = ".DS_Store,*.tmp,*.cache"
         
@@ -56,9 +68,12 @@ class BackupSettings {
         // Remote defaults
         self.remoteName = "backup-remote"
         self.remoteType = .local  // Default to local now
+        
+        // Log retention defaults (NEW)
+        self.logRetentionDays = LogRetentionPeriod.days30.rawValue
     }
     
-    // MARK: - Source Path Helpers (NEW)
+    // MARK: - Source Path Helpers
     
     var fullSourcePath: String {
         // Ensure path ends with trailing slash for rsync/rclone
@@ -220,7 +235,7 @@ class BackupSettings {
     func validateConfiguration() -> (isValid: Bool, errors: [String]) {
         var errors: [String] = []
         
-        // Validate source path (NEW)
+        // Validate source path
         if sourcePath.isEmpty {
             errors.append("Source path is required")
         } else if !sourceExists {
