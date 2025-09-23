@@ -10,6 +10,7 @@ struct LogView: View {
     @State private var exportAllLogs = false
     @State private var showingLogStats = false
     @State private var logStats: (total: Int, byLevel: [LogLevel: Int], oldestDate: Date?, newestDate: Date?) = (0, [:], nil, nil)
+    @State private var exportDocument: LogDocument?
     
     private var filteredLogs: [LogEntry] {
         var filtered = logManager.logs
@@ -64,13 +65,11 @@ struct LogView: View {
                 // Export menu (ENHANCED)
                 Menu("Export") {
                     Button("Export Visible Logs") {
-                        exportAllLogs = false
-                        showingExportPanel = true
+                        exportVisibleLogs()
                     }
                     
                     Button("Export All Logs from Database") {
-                        exportAllLogs = true
-                        showingExportPanel = true
+                        exportAllLogsFromDatabase()
                     }
                 }
                 
@@ -164,9 +163,7 @@ struct LogView: View {
         }
         .fileExporter(
             isPresented: $showingExportPanel,
-            document: exportAllLogs ?
-                AllLogsDocument(logManager: logManager) :
-                LogDocument(entries: logManager.logs),
+            document: exportDocument ?? LogDocument(entries: []),
             contentType: .plainText,
             defaultFilename: "backup-logs-\(Date().formatted(date: .numeric, time: .omitted))\(exportAllLogs ? "-all" : "").txt"
         ) { result in
@@ -176,9 +173,30 @@ struct LogView: View {
             case .failure(let error):
                 print("Export failed: \(error)")
             }
+            exportDocument = nil // Clean up
         }
         .sheet(isPresented: $showingLogStats) {
             LogStatisticsView(stats: logStats, logManager: logManager)
+        }
+    }
+    
+    // MARK: - Export Methods
+    
+    private func exportVisibleLogs() {
+        exportAllLogs = false
+        exportDocument = LogDocument(entries: logManager.logs)
+        showingExportPanel = true
+    }
+    
+    private func exportAllLogsFromDatabase() {
+        exportAllLogs = true
+        isExporting = true
+        
+        Task { @MainActor in
+            let allLogsContent = await logManager.exportAllLogsFromDatabase()
+            exportDocument = LogDocument(content: allLogsContent)
+            isExporting = false
+            showingExportPanel = true
         }
     }
 }
@@ -388,63 +406,48 @@ struct LogStatisticsView: View {
     }
 }
 
-// MARK: - Enhanced Document Types
+// MARK: - Updated Document Type
 struct LogDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.plainText] }
     
-    var entries: [LogEntry]
+    private var entries: [LogEntry]?
+    private var content: String?
     
     init(entries: [LogEntry]) {
         self.entries = entries
+        self.content = nil
+    }
+    
+    init(content: String) {
+        self.entries = nil
+        self.content = content
     }
     
     init(configuration: ReadConfiguration) throws {
         // Not used for export
         self.entries = []
+        self.content = nil
     }
     
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .medium
+        let finalContent: String
         
-        let content = entries.map { entry in
-            "[\(formatter.string(from: entry.timestamp))] [\(entry.level.displayName)] \(entry.message)"
-        }.joined(separator: "\n")
-        
-        return FileWrapper(regularFileWithContents: content.data(using: .utf8) ?? Data())
-    }
-}
-
-// MARK: - All Logs Document for Database Export (NEW)
-struct AllLogsDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.plainText] }
-    
-    let logManager: LogManager
-    
-    init(logManager: LogManager) {
-        self.logManager = logManager
-    }
-    
-    init(configuration: ReadConfiguration) throws {
-        fatalError("AllLogsDocument is for export only")
-    }
-    
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        // This will be executed on a background thread, so we need to be careful
-        let content = Task {
-            await logManager.exportAllLogsFromDatabase()
+        if let content = content {
+            // Use pre-formatted content
+            finalContent = content
+        } else if let entries = entries {
+            // Format entries
+            let formatter = DateFormatter()
+            formatter.dateStyle = .short
+            formatter.timeStyle = .medium
+            
+            finalContent = entries.map { entry in
+                "[\(formatter.string(from: entry.timestamp))] [\(entry.level.displayName)] \(entry.message)"
+            }.joined(separator: "\n")
+        } else {
+            finalContent = ""
         }
         
-        // For now, return the in-memory logs as fallback
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .medium
-        
-        let fallbackContent = logManager.logs.map { entry in
-            "[\(formatter.string(from: entry.timestamp))] [\(entry.level.displayName)] \(entry.message)"
-        }.joined(separator: "\n")
-        
-        return FileWrapper(regularFileWithContents: fallbackContent.data(using: .utf8) ?? Data())
+        return FileWrapper(regularFileWithContents: finalContent.data(using: .utf8) ?? Data())
     }
 }

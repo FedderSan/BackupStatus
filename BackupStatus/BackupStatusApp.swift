@@ -1,10 +1,3 @@
-//
-//  BackupStatusApp.swift
-//  BackupStatus
-//
-//  Created by Daniel Feddersen on 26/07/2025.
-//
-
 import SwiftUI
 import SwiftData
 
@@ -20,7 +13,7 @@ extension URL {
 @main
 struct BackupStatusApp: App {
     let modelContainer: ModelContainer
-    @StateObject private var logManager: LogManager
+    let logManager: LogManager  // Changed from @StateObject to regular property
     
     init() {
         // Define schema - Include all models for persistence
@@ -70,7 +63,7 @@ struct BackupStatusApp: App {
         */
         
         do {
-            modelContainer = try ModelContainer(for: schema, configurations: [config])
+            self.modelContainer = try ModelContainer(for: schema, configurations: [config])
             print("✅ ModelContainer created successfully")
             
             // Verify database file was created
@@ -87,8 +80,8 @@ struct BackupStatusApp: App {
             fatalError("Failed to create ModelContainer: \(error)")
         }
         
-        // Create LogManager with modelContainer for persistence
-        self._logManager = StateObject(wrappedValue: LogManager(modelContainer: modelContainer))
+        // Create LogManager directly without @StateObject wrapper
+        self.logManager = LogManager(modelContainer: self.modelContainer)
     }
     
     var body: some Scene {

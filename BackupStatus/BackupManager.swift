@@ -89,7 +89,7 @@ class BackupManager: ObservableObject {
         
         do {
             // Step 1: Verify database connection
-            await verifyDatabaseConnection()
+            try await verifyDatabaseConnection()
             
             // Step 2: Load last backup status
             await loadLastBackupStatus()
@@ -110,7 +110,7 @@ class BackupManager: ObservableObject {
         }
     }
     
-    private func verifyDatabaseConnection() async {
+    private func verifyDatabaseConnection() async throws {  // Add 'throws' here
         logManager.log("📊 Verifying database connection...", level: .debug)
         
         do {
@@ -124,7 +124,7 @@ class BackupManager: ObservableObject {
             
         } catch {
             logManager.log("❌ Database connection issue: \(error)", level: .error)
-            throw error
+            throw error  // This will now work because the function is declared 'throws'
         }
     }
     
