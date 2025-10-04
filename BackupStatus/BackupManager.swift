@@ -110,7 +110,7 @@ class BackupManager: ObservableObject {
         }
     }
     
-    private func verifyDatabaseConnection() async throws {  // Add 'throws' here
+    private func verifyDatabaseConnection() async throws {
         logManager.log("📊 Verifying database connection...", level: .debug)
         
         do {
@@ -124,7 +124,7 @@ class BackupManager: ObservableObject {
             
         } catch {
             logManager.log("❌ Database connection issue: \(error)", level: .error)
-            throw error  // This will now work because the function is declared 'throws'
+            throw error
         }
     }
     
@@ -269,7 +269,6 @@ class BackupManager: ObservableObject {
             return
         }
         
-        // ADDED: More detailed logging to debug the issue
         logManager.log("🚀 runBackup called with force=\(force)", level: .info)
         
         // Ensure we're on main actor for UI updates
@@ -283,7 +282,7 @@ class BackupManager: ObservableObject {
             isRunning = true
         }
         
-        // ADDED: Check if external tools exist
+        // Check if external tools exist
         if !FileManager.default.fileExists(atPath: rclonePath) {
             logManager.log("❌ rclone not found at: \(rclonePath)", level: .error)
             await MainActor.run {
@@ -314,7 +313,6 @@ class BackupManager: ObservableObject {
             return
         }
         
-        // ADDED: More detailed logging
         logManager.log("✅ Configuration valid, proceeding with backup", level: .info)
         logManager.log("📁 Source: \(settings.fullSourcePath)", level: .info)
         logManager.log("🎯 Remote type: \(settings.remoteType.displayName)", level: .info)
@@ -447,7 +445,7 @@ class BackupManager: ObservableObject {
         logManager.log("Connection test result: \(isConnected ? "SUCCESS" : "FAILED")", level: isConnected ? .info : .error)
     }
     
-    // MARK: - Local Backup Operations
+    // MARK: - Local Backup Operations (FIXED FOR ICLOUD COMPATIBILITY)
     
     private func performLocalBackup(_ settings: BackupSettings) async -> (success: Bool, error: String?, filesCount: Int, totalSize: Int64) {
         logManager.log("Starting local file system backup", level: .info)
@@ -456,6 +454,12 @@ class BackupManager: ObservableObject {
         
         let fileManager = FileManager.default
         let date = Date()
+        
+        // Check if destination is in iCloud Drive
+        let isICloudPath = settings.fullLocalDestinationPath.contains("Library/Mobile Documents/com~apple~CloudDocs")
+        if isICloudPath {
+            logManager.log("📱 iCloud Drive destination detected - using iCloud-compatible settings", level: .info)
+        }
         
         do {
             // Build exclude arguments if any patterns are specified
@@ -470,23 +474,32 @@ class BackupManager: ObservableObject {
             try fileManager.createDirectory(atPath: latestPath, withIntermediateDirectories: true, attributes: nil)
             
             logManager.log("Syncing to latest folder: \(latestPath)", level: .info)
+            
+            // CRITICAL FIX: For iCloud destinations, don't preserve timestamps
+            // This makes files appear "new" so iCloud uploads them
             let latestResult = await runRsyncCommand(
                 from: settings.fullSourcePath,
                 to: latestPath,
-                delete: true,  // Mirror source exactly
-                excludePatterns: excludeArgs
+                delete: true,
+                excludePatterns: excludeArgs,
+                preserveTimestamps: !isICloudPath  // Don't preserve timestamps for iCloud!
             )
             
             guard latestResult.success else {
                 return (false, "Latest sync failed: \(latestResult.error ?? "Unknown")", 0, 0)
             }
             
+            // CRITICAL FIX: Set proper permissions AFTER rsync completes
+            // This must be done after rsync because rsync preserves source permissions
+            if isICloudPath {
+                logManager.log("📱 Fixing permissions for iCloud compatibility", level: .debug)
+                await fixICloudPermissions(at: latestPath)
+            }
+            
             // Step 2: Create versioned backup if enabled
             if settings.localCreateDatedFolders {
                 let versionPath = settings.localVersionPath(for: date)
                 
-                // Only create a version if it's different from latest (to avoid duplicates)
-                // For force backup or scheduled backup, we create a snapshot
                 logManager.log("Creating version snapshot: \(versionPath)", level: .info)
                 
                 try fileManager.createDirectory(
@@ -495,27 +508,38 @@ class BackupManager: ObservableObject {
                     attributes: nil
                 )
                 
+                // Set proper permissions for versions directory too
+                let versionsDir = URL(fileURLWithPath: versionPath).deletingLastPathComponent().path
+                try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: versionsDir)
+                
                 // Use hard links for efficiency (instant, no extra space for unchanged files)
                 let linkResult = await runHardLinkCopy(from: latestPath, to: versionPath)
                 
                 if !linkResult.success {
                     // Fall back to regular copy if hard links fail
                     logManager.log("Hard link failed, using regular copy", level: .warning)
+                    
+                    // IMPORTANT: For versions, preserve original timestamps for backup integrity
                     let versionResult = await runRsyncCommand(
                         from: latestPath,
                         to: versionPath,
                         delete: false,
-                        excludePatterns: []
+                        excludePatterns: [],
+                        preserveTimestamps: true  // Preserve timestamps in versions folder!
                     )
                     
                     if !versionResult.success {
                         logManager.log("Version backup failed: \(versionResult.error ?? "Unknown")", level: .warning)
-                        // Don't fail the whole backup if versioning fails
                     }
                 }
                 
-                // NEW: Clean up old versions after creating new one
+                // Clean up old versions after creating new one
                 await cleanupOldVersions(settings)
+            }
+            
+            if isICloudPath {
+                logManager.log("📱 iCloud Drive backup complete - files should upload automatically", level: .info)
+                logManager.log("💡 Check iCloud.com in a few minutes to verify upload", level: .info)
             }
             
             // Get backup stats from latest folder
@@ -529,8 +553,54 @@ class BackupManager: ObservableObject {
         }
     }
     
-    // MARK: - NEW: Version Cleanup Implementation
-
+    // MARK: - iCloud Permission Fix
+    
+    /// Fixes permissions recursively for iCloud compatibility
+    /// Must be called AFTER rsync to override source permissions
+    private func fixICloudPermissions(at path: String) async {
+        await withCheckedContinuation { continuation in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/find")
+            
+            // Find all directories and set to 755 (rwxr-xr-x)
+            // Find all files and set to 644 (rw-r--r--)
+            // This makes everything readable by iCloud daemon
+            task.arguments = [
+                path,
+                "(",
+                "-type", "d", "-exec", "chmod", "755", "{}", ";",
+                ")",
+                "-o",
+                "(",
+                "-type", "f", "-exec", "chmod", "644", "{}", ";",
+                ")"
+            ]
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                
+                if task.terminationStatus == 0 {
+                    Task { @MainActor in
+                        self.logManager.log("✅ Fixed permissions for iCloud sync", level: .debug)
+                    }
+                } else {
+                    Task { @MainActor in
+                        self.logManager.log("⚠️ Some permissions could not be fixed", level: .warning)
+                    }
+                }
+            } catch {
+                Task { @MainActor in
+                    self.logManager.log("❌ Error fixing permissions: \(error)", level: .error)
+                }
+            }
+            
+            continuation.resume()
+        }
+    }
+    
+    // MARK: - Version Cleanup Methods
+    
     private func cleanupOldVersions(_ settings: BackupSettings) async {
         guard settings.shouldCleanupVersions() else {
             logManager.log("🗂️ Version cleanup disabled - keeping all versions", level: .debug)
@@ -649,8 +719,15 @@ class BackupManager: ObservableObject {
         }
     }
     
-    private func runRsyncCommand(from source: String, to destination: String, delete: Bool, excludePatterns: [String] = []) async -> (success: Bool, error: String?) {
-        // ADDED: Check if rsync exists
+    // MARK: - rsync Command (Updated for iCloud compatibility)
+    
+    private func runRsyncCommand(
+        from source: String,
+        to destination: String,
+        delete: Bool,
+        excludePatterns: [String] = [],
+        preserveTimestamps: Bool = true
+    ) async -> (success: Bool, error: String?) {
         let rsyncPath = "/usr/bin/rsync"
         guard FileManager.default.fileExists(atPath: rsyncPath) else {
             logManager.log("❌ rsync not found at: \(rsyncPath)", level: .error)
@@ -661,10 +738,20 @@ class BackupManager: ObservableObject {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: rsyncPath)
             
-            var arguments = [
-                "-avh",  // archive, verbose, human-readable
-                "--progress"
-            ]
+            var arguments: [String]
+            
+            if preserveTimestamps {
+                // Standard archive mode - preserves everything including timestamps
+                arguments = ["-avh", "--progress"]
+            } else {
+                // Modified for iCloud - don't preserve timestamps so iCloud sees files as "new"
+                arguments = [
+                    "-rlDvh",  // recursive, links, devices, verbose, human-readable
+                    "--progress",
+                    "--no-times",  // Don't preserve modification times
+                    "--omit-dir-times"  // Don't preserve directory times
+                ]
+            }
             
             if delete {
                 arguments.append("--delete")
@@ -682,7 +769,8 @@ class BackupManager: ObservableObject {
             task.standardError = errorPipe
             
             do {
-                logManager.log("🔧 Running rsync: \(arguments.joined(separator: " "))", level: .debug)
+                let timestampMode = preserveTimestamps ? "preserving timestamps" : "current timestamps (iCloud mode)"
+                logManager.log("🔧 Running rsync with \(timestampMode)", level: .debug)
                 try task.run()
                 task.waitUntilExit()
                 
@@ -942,7 +1030,6 @@ class BackupManager: ObservableObject {
     }
     
     private func runRcloneCommand(_ arguments: [String]) async -> (success: Bool, error: String?) {
-        // ADDED: Check if rclone exists before running
         guard FileManager.default.fileExists(atPath: rclonePath) else {
             logManager.log("❌ rclone not found at: \(rclonePath)", level: .error)
             return (false, "rclone not found at \(rclonePath)")
