@@ -512,24 +512,51 @@ class BackupManager: ObservableObject {
                 let versionsDir = URL(fileURLWithPath: versionPath).deletingLastPathComponent().path
                 try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: versionsDir)
                 
-                // Use hard links for efficiency (instant, no extra space for unchanged files)
-                let linkResult = await runHardLinkCopy(from: latestPath, to: versionPath)
-                
-                if !linkResult.success {
-                    // Fall back to regular copy if hard links fail
-                    logManager.log("Hard link failed, using regular copy", level: .warning)
+                // SIMPLE FIX: Choose method based on destination type
+                if isICloudPath {
+                    // ☁️ iCloud Drive: Use regular copy (NO hard links)
+                    logManager.log("☁️ iCloud destination - using regular copy (no hard links)", level: .info)
                     
-                    // IMPORTANT: For versions, preserve original timestamps for backup integrity
                     let versionResult = await runRsyncCommand(
                         from: latestPath,
                         to: versionPath,
                         delete: false,
                         excludePatterns: [],
-                        preserveTimestamps: true  // Preserve timestamps in versions folder!
+                        preserveTimestamps: false  // Use CURRENT time so iCloud sees files as "new"
                     )
                     
-                    if !versionResult.success {
-                        logManager.log("Version backup failed: \(versionResult.error ?? "Unknown")", level: .warning)
+                    if versionResult.success {
+                        logManager.log("✅ Version created with independent files (iCloud-compatible)", level: .info)
+                    } else {
+                        logManager.log("❌ Version backup failed: \(versionResult.error ?? "Unknown")", level: .warning)
+                    }
+                    
+                    // Fix permissions for iCloud
+                    await fixICloudPermissions(at: versionPath)
+                    
+                } else {
+                    // 💾 Non-iCloud: Use efficient hard links (saves space)
+                    logManager.log("💾 Non-iCloud destination - using space-efficient hard links", level: .info)
+                    
+                    let linkResult = await runHardLinkCopy(from: latestPath, to: versionPath)
+                    
+                    if linkResult.success {
+                        logManager.log("✅ Version created with hard links (space-efficient)", level: .info)
+                    } else {
+                        // Fallback to regular copy
+                        logManager.log("⚠️ Hard link failed, using regular copy", level: .warning)
+                        
+                        let versionResult = await runRsyncCommand(
+                            from: latestPath,
+                            to: versionPath,
+                            delete: false,
+                            excludePatterns: [],
+                            preserveTimestamps: true  // Preserve original timestamps for non-iCloud
+                        )
+                        
+                        if !versionResult.success {
+                            logManager.log("❌ Version backup failed: \(versionResult.error ?? "Unknown")", level: .warning)
+                        }
                     }
                 }
                 
@@ -697,7 +724,11 @@ class BackupManager: ObservableObject {
         return await withCheckedContinuation { continuation in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/bin/cp")
-            task.arguments = ["-al", source, destination]  // -a = archive, -l = hard links
+            
+            // Use "source/." to copy contents, not the directory itself
+            let sourceWithDot = source.hasSuffix("/") ? "\(source)." : "\(source)/."
+            
+            task.arguments = ["-al", sourceWithDot, destination]  // -a = archive, -l = hard links
             
             let errorPipe = Pipe()
             task.standardError = errorPipe
