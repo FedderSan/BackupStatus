@@ -508,9 +508,12 @@ class BackupManager: ObservableObject {
                     attributes: nil
                 )
                 
-                // Set proper permissions for versions directory too
+                // Set proper permissions for versions directory
                 let versionsDir = URL(fileURLWithPath: versionPath).deletingLastPathComponent().path
                 try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: versionsDir)
+                
+                // CRITICAL: Add trailing slash so rsync copies CONTENTS, not the directory itself
+                let sourceWithSlash = latestPath.hasSuffix("/") ? latestPath : "\(latestPath)/"
                 
                 // SIMPLE FIX: Choose method based on destination type
                 if isICloudPath {
@@ -518,7 +521,7 @@ class BackupManager: ObservableObject {
                     logManager.log("☁️ iCloud destination - using regular copy (no hard links)", level: .info)
                     
                     let versionResult = await runRsyncCommand(
-                        from: latestPath,
+                        from: sourceWithSlash,  // ✅ With trailing slash!
                         to: versionPath,
                         delete: false,
                         excludePatterns: [],
@@ -547,7 +550,7 @@ class BackupManager: ObservableObject {
                         logManager.log("⚠️ Hard link failed, using regular copy", level: .warning)
                         
                         let versionResult = await runRsyncCommand(
-                            from: latestPath,
+                            from: sourceWithSlash,  // ✅ With trailing slash!
                             to: versionPath,
                             delete: false,
                             excludePatterns: [],
