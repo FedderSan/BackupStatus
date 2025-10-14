@@ -1170,9 +1170,8 @@ class BackupManager: ObservableObject {
         await dataActor.cleanOldSessions()
     }
     
-    // MARK: - Debug Methods (for development only)
+    // MARK: - Debug Methods (Always available - controlled by UI)
     
-    #if DEBUG
     func debugConnection() async -> Bool {
         guard let settings = await dataActor.getSettings() else {
             logManager.log("❌ No settings found for debug", level: .error)
@@ -1253,5 +1252,4 @@ class BackupManager: ObservableObject {
             logManager.log("🔐 Password handling not implemented for \(settings.remoteType.displayName)", level: .info)
         }
     }
-    #endif
 }

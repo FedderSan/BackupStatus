@@ -38,14 +38,20 @@ struct PreferencesView: View {
     @State private var logRetentionPeriod: LogRetentionPeriod = .days30
     @State private var backupVersionRetention: BackupVersionRetention = .versions14
     
+    // Debug Mode
+    @AppStorage("debugModeEnabled") private var debugModeEnabled = false
+    
     @State private var showingPassword = false
     @State private var testResult = ""
     @State private var isTestingConnection = false
     @State private var isSaving = false
     
+    // FIX: Prevent multiple reloads of settings
+    @State private var hasLoadedInitialSettings = false
+    
     var body: some View {
         VStack(spacing: 0) {
-            // Header
+            // Header with Debug Indicator
             headerView
             
             Divider()
@@ -75,6 +81,12 @@ struct PreferencesView: View {
                         Label("Data", systemImage: "archivebox")
                     }
                     .tag(3)
+                
+                advancedTab
+                    .tabItem {
+                        Label("Advanced", systemImage: "wrench.and.screwdriver")
+                    }
+                    .tag(4)
             }
             .padding()
             
@@ -86,12 +98,18 @@ struct PreferencesView: View {
         .frame(minWidth: 700, idealWidth: 800, maxWidth: 1200,
                minHeight: 600, idealHeight: 700, maxHeight: 1000)
         .onAppear {
-            loadSettings()
-            loadAutoStartSettings()
+            if !hasLoadedInitialSettings {
+                loadSettings()
+                loadAutoStartSettings()
+                hasLoadedInitialSettings = true
+            }
+        }
+        .onDisappear {
+            hasLoadedInitialSettings = false
         }
     }
     
-    // MARK: - Header
+    // MARK: - Header with Debug Badge
     
     private var headerView: some View {
         HStack {
@@ -100,9 +118,20 @@ struct PreferencesView: View {
                 .foregroundColor(.blue)
             
             VStack(alignment: .leading, spacing: 2) {
-                Text("Backup Settings")
-                    .font(.title2)
-                    .fontWeight(.bold)
+                HStack(spacing: 8) {
+                    Text("Backup Settings")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    
+                    // Debug Mode Badge
+                    #if DEBUG
+                    debugBadge(text: "DEV", color: .purple)
+                    #else
+                    if debugModeEnabled {
+                        debugBadge(text: "DEBUG", color: .orange)
+                    }
+                    #endif
+                }
                 
                 if let validation = validateCurrentSettings(), !validation.isValid {
                     Text("\(validation.errors.count) issue\(validation.errors.count == 1 ? "" : "s") need attention")
@@ -125,6 +154,139 @@ struct PreferencesView: View {
             }
         }
         .padding()
+    }
+    
+    // Debug Badge Helper
+    private func debugBadge(text: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "ant.circle.fill")
+                .font(.caption2)
+            Text(text)
+                .font(.caption2)
+                .fontWeight(.bold)
+        }
+        .foregroundColor(color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.15))
+        .cornerRadius(4)
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(color.opacity(0.3), lineWidth: 1)
+        )
+    }
+    
+    // MARK: - NEW: Advanced Tab
+    
+    private var advancedTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                sectionHeader("Advanced Settings", icon: "wrench.and.screwdriver")
+                
+                // Debug Mode Section
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Developer Options")
+                        .fontWeight(.semibold)
+                    
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle(isOn: $debugModeEnabled) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Enable Debug Mode")
+                                    .fontWeight(.medium)
+                                Text("Show advanced debugging tools in the menu bar")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        
+                        if debugModeEnabled {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Image(systemName: "info.circle.fill")
+                                        .foregroundColor(.blue)
+                                    Text("Debug tools are now available")
+                                        .font(.subheadline)
+                                        .foregroundColor(.blue)
+                                }
+                                .padding()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.blue.opacity(0.1))
+                                .cornerRadius(8)
+                                
+                                Text("Available debug tools:")
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.secondary)
+                                
+                                VStack(alignment: .leading, spacing: 4) {
+                                    debugToolItem("🔍 Debug Connection", "Test connection with detailed logging")
+                                    debugToolItem("🔧 Debug rclone Config", "View current rclone configuration")
+                                    debugToolItem("🔐 Debug Password", "Test password encryption/decryption")
+                                    debugToolItem("📊 Run Diagnostics", "Full system diagnostics")
+                                    debugToolItem("📈 Version Stats", "View backup version statistics")
+                                    debugToolItem("🗑️ Clean Old Versions", "Manually trigger version cleanup")
+                                    debugToolItem("🧹 Clean Old Logs", "Manually trigger log cleanup")
+                                }
+                                .padding()
+                                .background(Color(NSColor.controlBackgroundColor))
+                                .cornerRadius(8)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(8)
+                }
+                
+                // Application Info Section
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Application Info")
+                        .fontWeight(.semibold)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        infoRow(label: "Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
+                        infoRow(label: "Build", value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown")
+                        infoRow(label: "Bundle ID", value: Bundle.main.bundleIdentifier ?? "Unknown")
+                        
+                        #if DEBUG
+                        infoRow(label: "Build Type", value: "Debug", color: .purple)
+                        #else
+                        infoRow(label: "Build Type", value: "Release", color: .green)
+                        #endif
+                    }
+                    .padding()
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(8)
+                }
+                
+                Spacer()
+            }
+            .padding()
+        }
+    }
+    
+    private func debugToolItem(_ title: String, _ description: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.medium)
+            Spacer()
+            Text(description)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+    
+    private func infoRow(label: String, value: String, color: Color = .primary) -> some View {
+        HStack {
+            Text(label)
+                .foregroundColor(.secondary)
+            Spacer()
+            Text(value)
+                .fontWeight(.medium)
+                .foregroundColor(color)
+        }
     }
     
     // MARK: - General Tab
@@ -224,7 +386,8 @@ struct PreferencesView: View {
         }
     }
     
-    // MARK: - Source Tab
+    // MARK: - Keep all other tabs as they were...
+    // (sourceTab, destinationTab, dataManagementTab remain unchanged)
     
     private var sourceTab: some View {
         ScrollView {
@@ -308,8 +471,6 @@ struct PreferencesView: View {
             .padding()
         }
     }
-    
-    // MARK: - Destination Tab
     
     private var destinationTab: some View {
         ScrollView {

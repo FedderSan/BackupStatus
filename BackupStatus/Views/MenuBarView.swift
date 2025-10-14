@@ -1,4 +1,4 @@
-// MARK: - Complete Fixed MenuBarView with Proper Force Backup Logic and Startup Diagnostics
+// MARK: - MenuBarView with Debug Mode Support
 import SwiftUI
 import SwiftData
 
@@ -11,6 +11,9 @@ struct MenuBarView: View {
     @State private var showingConfigurationAlert = false
     @Environment(\.openWindow) private var openWindow
     
+    // Debug Mode
+    @AppStorage("debugModeEnabled") private var debugModeEnabled = false
+    
     init(modelContainer: ModelContainer, logManager: LogManager) {
         self._backupManager = StateObject(wrappedValue: BackupManager(modelContainer: modelContainer, logManager: logManager))
         self.logManager = logManager
@@ -18,7 +21,7 @@ struct MenuBarView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Initialization Status (NEW)
+            // Initialization Status
             if !backupManager.isInitialized {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -35,6 +38,31 @@ struct MenuBarView: View {
                 
                 Divider()
             }
+            
+            // Debug Mode Indicator (when enabled)
+            #if DEBUG
+            Text("🔧 DEV BUILD ACTIVE")
+                .font(.caption)
+                .fontWeight(.bold)
+                .foregroundColor(.purple)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.purple.opacity(0.2))
+                .cornerRadius(6)
+            
+            Divider()
+            #else
+            if debugModeEnabled {
+                Text("🔧 DEBUG MODE ACTIVE")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.2))
+                    .cornerRadius(6)
+                
+                Divider()
+            }
+            #endif
             
             // Backup Status Section
             VStack(alignment: .leading, spacing: 4) {
@@ -108,7 +136,8 @@ struct MenuBarView: View {
             Divider()
             
             Button("Test Connection") {
-                Task { @MainActor in
+                Task { @MainActor [weak backupManager] in
+                    guard let backupManager = backupManager else { return }
                     await backupManager.runConnectionTest()
                 }
             }
@@ -116,7 +145,7 @@ struct MenuBarView: View {
             
             Divider()
             
-            // Window Actions - Fixed for ViewBridge issues
+            // Window Actions
             Button("View History") {
                 safeOpenWindow("history")
             }
@@ -129,92 +158,14 @@ struct MenuBarView: View {
                 safeOpenWindow("settings")
             }
             
-#if DEBUG
-Divider()
-
-VStack(alignment: .leading, spacing: 2) {
-    Text("Debug Tools")
-        .font(.caption)
-        .foregroundColor(.secondary)
-    
-    Button("🔍 Debug Connection") {
-        Task { @MainActor in
-            await backupManager.debugConnection()
-        }
-    }
-    .disabled(!backupManager.isInitialized)
-    
-    Button("🔧 Debug rclone Config") {
-        Task { @MainActor in
-            await backupManager.debugRcloneConfig()
-        }
-    }
-    .disabled(!backupManager.isInitialized)
-    
-    Button("🔐 Debug Password") {
-        Task { @MainActor in
-            await backupManager.debugPasswordHandling()
-        }
-    }
-    .disabled(!backupManager.isInitialized)
-    
-    Button("📊 Run Diagnostics") {
-        Task { @MainActor in
-            await backupManager.runStartupDiagnostics()
-        }
-    }
-    .disabled(!backupManager.isInitialized)
-    
-    // NEW: Version Management Debug Tools
-    Divider()
-    
-    VStack(alignment: .leading, spacing: 2) {
-        Text("Version Management")
-            .font(.caption2)
-            .foregroundColor(.secondary)
-        
-        Button("📈 Version Stats") {
-            Task { @MainActor in
-                let stats = await backupManager.getVersionStatistics()
-                logManager.log("🗂️ Version Statistics:", level: .info)
-                logManager.log("  Total versions: \(stats.totalVersions)", level: .info)
-                logManager.log("  Total size: \(ByteCountFormatter.string(fromByteCount: stats.totalSize, countStyle: .file))", level: .info)
-                if let oldest = stats.oldestVersion {
-                    logManager.log("  Oldest: \(oldest)", level: .info)
-                }
-                if let newest = stats.newestVersion {
-                    logManager.log("  Newest: \(newest)", level: .info)
-                }
+            // Debug Tools (shown when debug mode is enabled OR in DEBUG build)
+            #if DEBUG
+            debugMenuSection
+            #else
+            if debugModeEnabled {
+                debugMenuSection
             }
-        }
-        .disabled(!backupManager.isInitialized)
-        
-        Button("🗑️ Clean Old Versions") {
-            Task { @MainActor in
-                await backupManager.cleanupOldVersionsManually()
-            }
-        }
-        .disabled(!backupManager.isInitialized)
-    }
-    
-    // Log Management Debug Tools
-    VStack(alignment: .leading, spacing: 2) {
-        Text("Log Management")
-            .font(.caption2)
-            .foregroundColor(.secondary)
-        
-        Button("🧹 Clean Old Logs") {
-            Task { @MainActor in
-                await logManager.forceCleanOldLogs()
-            }
-        }
-    }
-    
-    Button("Debug Tools") {
-        safeOpenWindow("debug")
-    }
-}
-#endif
+            #endif
             
             Divider()
             
@@ -241,7 +192,8 @@ VStack(alignment: .leading, spacing: 2) {
             }
             Button("Run Backup", role: .destructive) {
                 logManager.log("✅ User confirmed scheduled backup", level: .info)
-                Task { @MainActor in
+                Task { @MainActor [weak backupManager] in
+                    guard let backupManager = backupManager else { return }
                     await backupManager.runBackup()
                 }
             }
@@ -261,15 +213,128 @@ VStack(alignment: .leading, spacing: 2) {
         .onAppear {
             startPeriodicBackup()
             
-            // Run startup diagnostics (NEW)
-            Task {
-                // Wait a moment to let the UI settle
-                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+            // Run startup diagnostics
+            Task { @MainActor [weak backupManager] in
+                guard let backupManager = backupManager else { return }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
                 await backupManager.runStartupDiagnostics()
             }
         }
         .onDisappear {
             timer?.invalidate()
+        }
+    }
+    
+    // MARK: - Debug Menu Section
+    
+    private var debugMenuSection: some View {
+        Group {
+            Divider()
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Debug Tools")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Button("🔍 Debug Connection") {
+                    Task { @MainActor [weak backupManager] in
+                        guard let backupManager = backupManager else { return }
+                        await backupManager.debugConnection()
+                    }
+                }
+                .disabled(!backupManager.isInitialized)
+                
+                Button("🔧 Debug rclone Config") {
+                    Task { @MainActor [weak backupManager] in
+                        guard let backupManager = backupManager else { return }
+                        await backupManager.debugRcloneConfig()
+                    }
+                }
+                .disabled(!backupManager.isInitialized)
+                
+                Button("🔐 Debug Password") {
+                    Task { @MainActor [weak backupManager] in
+                        guard let backupManager = backupManager else { return }
+                        await backupManager.debugPasswordHandling()
+                    }
+                }
+                .disabled(!backupManager.isInitialized)
+                
+                Button("📊 Run Diagnostics") {
+                    Task { @MainActor [weak backupManager] in
+                        guard let backupManager = backupManager else { return }
+                        await backupManager.runStartupDiagnostics()
+                    }
+                }
+                .disabled(!backupManager.isInitialized)
+                
+                // Version Management Debug Tools
+                Divider()
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Version Management")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    
+                    Button("📈 Version Stats") {
+                        Task { @MainActor [weak backupManager, weak logManager] in
+                            guard let backupManager = backupManager, let logManager = logManager else { return }
+                            let stats = await backupManager.getVersionStatistics()
+                            logManager.log("🗂️ Version Statistics:", level: .info)
+                            logManager.log("  Total versions: \(stats.totalVersions)", level: .info)
+                            logManager.log("  Total size: \(ByteCountFormatter.string(fromByteCount: stats.totalSize, countStyle: .file))", level: .info)
+                            if let oldest = stats.oldestVersion {
+                                logManager.log("  Oldest: \(oldest)", level: .info)
+                            }
+                            if let newest = stats.newestVersion {
+                                logManager.log("  Newest: \(newest)", level: .info)
+                            }
+                        }
+                    }
+                    .disabled(!backupManager.isInitialized)
+                    
+                    Button("🗑️ Clean Old Versions") {
+                        Task { @MainActor [weak backupManager] in
+                            guard let backupManager = backupManager else { return }
+                            await backupManager.cleanupOldVersionsManually()
+                        }
+                    }
+                    .disabled(!backupManager.isInitialized)
+                }
+                
+                // Log Management Debug Tools
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Log Management")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    
+                    Button("🧹 Clean Old Logs") {
+                        Task { @MainActor [weak logManager] in
+                            guard let logManager = logManager else { return }
+                            await logManager.forceCleanOldLogs()
+                        }
+                    }
+                }
+                
+                Button("Debug Tools") {
+                    safeOpenWindow("debug")
+                }
+            }
+            
+            // Exit Debug Mode button (only shown in Release builds when debug mode is enabled)
+            #if !DEBUG
+            if debugModeEnabled {
+                Divider()
+                
+                Button(action: {
+                    debugModeEnabled = false
+                    logManager.log("❌ Debug mode disabled", level: .info)
+                }) {
+                    Label("Exit Debug Mode", systemImage: "xmark.circle.fill")
+                        .foregroundColor(.red)
+                }
+            }
+            #endif
         }
     }
     
@@ -294,7 +359,6 @@ VStack(alignment: .leading, spacing: 2) {
             } else {
                 logManager.log("✅ Configuration valid", level: .info)
                 
-                // For scheduled backup, check if we should show confirmation
                 if let lastBackup = backupManager.lastBackupTime {
                     let hoursSince = Date().timeIntervalSince(lastBackup) / 3600
                     logManager.log("⏰ Last backup was \(String(format: "%.2f", hoursSince)) hours ago", level: .info)
@@ -314,7 +378,6 @@ VStack(alignment: .leading, spacing: 2) {
         }
     }
     
-    // FIXED: Force backup should NEVER show confirmations or time checks
     private func runForceBackupSafely() {
         logManager.log("🔥 Force backup button clicked", level: .info)
         
@@ -335,7 +398,6 @@ VStack(alignment: .leading, spacing: 2) {
                 return
             }
             
-            // FIXED: No time checks, no confirmations - just run it!
             if let lastBackup = backupManager.lastBackupTime {
                 let hoursSince = Date().timeIntervalSince(lastBackup) / 3600
                 logManager.log("⏰ Last backup was \(String(format: "%.2f", hoursSince)) hours ago (ignoring for force backup)", level: .info)
@@ -350,9 +412,8 @@ VStack(alignment: .leading, spacing: 2) {
     
     private func safeOpenWindow(_ identifier: String) {
         Task { @MainActor in
-            // Add tiny delay to prevent ViewBridge issues
-            try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
-            openWindow(id: identifier)
+            try? await Task.sleep(nanoseconds: 10_000_000)
+            self.openWindow(id: identifier)
         }
     }
     
@@ -387,20 +448,18 @@ VStack(alignment: .leading, spacing: 2) {
     }
     
     private func startPeriodicBackup() {
-        // Cancel any existing timer first
         timer?.invalidate()
         
-        // Create new timer with safe execution
-        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak backupManager, weak logManager] _ in
+            guard let backupManager = backupManager, let logManager = logManager else { return }
+            
             Task { @MainActor in
-                // Only run if not currently running, initialized, and ensure we're on main thread
                 guard !backupManager.isRunning && backupManager.isInitialized else { return }
                 logManager.log("⏰ Periodic backup timer triggered", level: .debug)
                 await backupManager.runBackup()
             }
         }
         
-        // Log timer creation for debugging
         logManager.log("⏰ Periodic backup timer created (5-minute interval)", level: .debug)
     }
 }
