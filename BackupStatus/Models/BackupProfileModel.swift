@@ -1,35 +1,26 @@
-//
-//  BackupProfileTypeModel.swift
-//  BackupStatus
-//
-//  Created by Daniel Feddersen on 22/10/2025.
-//
 
 import SwiftData
 import Foundation
-
-
-
 // MARK: - Backup Profile Model
 @Model
 class BackupProfile {
     var id: UUID
     var name: String
     var isEnabled: Bool
-    var profileType: BackupProfileType
+    var profileTypeRaw: String  // Store as String for SwiftData
     
     // Source Configuration
     var sourcePath: String
-    var excludePatterns: String  // Comma-separated patterns
+    var excludePatterns: String
     
-    // Destination Configuration (local only for now)
+    // Destination Configuration
     var destinationPath: String
     
-    // Versioned Backup Settings (only for versioned type)
+    // Versioned Backup Settings
     var createVersions: Bool
-    var versionRetentionCount: Int  // Store as int for SwiftData
+    var versionRetentionCount: Int
     
-    // One-Way Sync Settings (only for oneWaySync type)
+    // One-Way Sync Settings
     var useTrashFolder: Bool
     var trashFolderName: String
     var autoEmptyTrash: Bool
@@ -44,6 +35,16 @@ class BackupProfile {
     var lastBackupFilesCount: Int
     var lastBackupSize: Int64
     
+    // Computed property for profileType
+    var profileType: BackupProfileType {
+        get {
+            return BackupProfileType(rawValue: profileTypeRaw) ?? .versioned
+        }
+        set {
+            profileTypeRaw = newValue.rawValue
+        }
+    }
+    
     var versionRetention: BackupVersionRetention {
         get {
             return BackupVersionRetention(rawValue: versionRetentionCount) ?? .versions14
@@ -57,7 +58,7 @@ class BackupProfile {
         self.id = UUID()
         self.name = name
         self.isEnabled = true
-        self.profileType = profileType
+        self.profileTypeRaw = profileType.rawValue
         
         // Source defaults
         self.sourcePath = ""
@@ -171,7 +172,7 @@ class BackupProfile {
         return (errors.isEmpty, errors)
     }
     
-    // MARK: - Version Management (for versioned profiles)
+    // MARK: - Version Management
     
     func getExistingVersions() -> [String] {
         guard profileType == .versioned else { return [] }
@@ -208,7 +209,7 @@ class BackupProfile {
         return Array(existingVersions.prefix(versionsToDelete))
     }
     
-    // MARK: - Trash Management (for oneWaySync profiles)
+    // MARK: - Trash Management
     
     func getTrashItems() -> [(name: String, date: Date, size: Int64)] {
         guard profileType == .oneWaySync && useTrashFolder else { return [] }

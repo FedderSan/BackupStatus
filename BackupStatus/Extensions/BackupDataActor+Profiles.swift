@@ -45,43 +45,25 @@ extension BackupDataActor {
     }
     
     func deleteProfile(_ profile: BackupProfile) {
-        // Find the profile by ID in the current context
-        let profileId = profile.id
-        if let profileToDelete = try? modelContext.fetch(
-            FetchDescriptor<BackupProfile>(
-                predicate: #Predicate<BackupProfile> { p in
-                    p.id == profileId
-                }
-            )
-        ).first {
-            modelContext.delete(profileToDelete)
-            try? modelContext.save()
-        }
+        // Delete the profile directly - SwiftData will handle it
+        modelContext.delete(profile)
+        try? modelContext.save()
     }
     
     func updateProfileStats(_ profile: BackupProfile, filesCount: Int, totalSize: Int64) {
-        // Find the profile by ID in the current context
-        let profileId = profile.id
-        if let profileToUpdate = try? modelContext.fetch(
-            FetchDescriptor<BackupProfile>(
-                predicate: #Predicate<BackupProfile> { p in
-                    p.id == profileId
-                }
-            )
-        ).first {
-            profileToUpdate.lastSuccessfulBackup = Date()
-            profileToUpdate.totalBackupsRun += 1
-            profileToUpdate.lastBackupFilesCount = filesCount
-            profileToUpdate.lastBackupSize = totalSize
-            
-            try? modelContext.save()
-        }
+        // Update the profile directly - it's already in the context
+        profile.lastSuccessfulBackup = Date()
+        profile.totalBackupsRun += 1
+        profile.lastBackupFilesCount = filesCount
+        profile.lastBackupSize = totalSize
+        
+        try? modelContext.save()
     }
     
-    func getProfile(byId id: UUID) -> BackupProfile? {
+    func getProfile(byName name: String) -> BackupProfile? {
         let descriptor = FetchDescriptor<BackupProfile>(
             predicate: #Predicate<BackupProfile> { profile in
-                profile.id == id
+                profile.name == name
             }
         )
         

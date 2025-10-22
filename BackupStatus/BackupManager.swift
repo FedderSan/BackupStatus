@@ -605,7 +605,7 @@ class BackupManager: ObservableObject {
         profile.versionRetentionCount = settings.backupVersionRetentionCount
         profile.backupIntervalHours = settings.backupIntervalHours
         
-        let context = ModelContext(modelContainer: dataActor.modelContainer)
+        let context = ModelContext(dataActor.modelContainer)
         context.insert(profile)
         try? context.save()
         

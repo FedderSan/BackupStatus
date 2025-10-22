@@ -1,9 +1,6 @@
-//
-//  BackupProfileTypeEnum.swift
-//  BackupStatus
-//
-//  Created by Daniel Feddersen on 22/10/2025.
-//
+import SwiftData
+import Foundation
+
 // MARK: - Backup Profile Types
 enum BackupProfileType: String, Codable, CaseIterable {
     case versioned = "versioned"

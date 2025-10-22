@@ -14,8 +14,6 @@ struct ProfileManagementView: View {
     
     @State private var selectedProfile: BackupProfile?
     @State private var showingAddProfile = false
-    @State private var showingDeleteConfirmation = false
-    @State private var profileToDelete: BackupProfile?
     
     var body: some View {
         NavigationSplitView {
@@ -25,7 +23,6 @@ struct ProfileManagementView: View {
                     ProfileListItem(profile: profile)
                         .tag(profile)
                 }
-                .onDelete(perform: deleteProfiles)
             }
             .navigationTitle("Backup Profiles")
             .toolbar {
@@ -40,7 +37,7 @@ struct ProfileManagementView: View {
             }
         } detail: {
             if let profile = selectedProfile {
-                ProfileDetailView(profile: profile)
+                ProfileDetailView(profile: profile, modelContext: modelContext)
             } else {
                 ContentUnavailableView(
                     "Select a Profile",
@@ -48,14 +45,6 @@ struct ProfileManagementView: View {
                     description: Text("Choose a profile from the list or create a new one")
                 )
             }
-        }
-    }
-    
-    private func deleteProfiles(at offsets: IndexSet) {
-        for index in offsets {
-            let profile = profiles[index]
-            profileToDelete = profile
-            showingDeleteConfirmation = true
         }
     }
 }
@@ -67,13 +56,11 @@ struct ProfileListItem: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            // Profile icon
             Image(systemName: profile.profileType.icon)
                 .font(.title3)
                 .foregroundColor(profile.isEnabled ? .blue : .gray)
                 .frame(width: 32)
             
-            // Profile info
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(profile.name)
@@ -103,7 +90,6 @@ struct ProfileListItem: View {
             
             Spacer()
             
-            // Enable toggle
             Toggle("", isOn: $profile.isEnabled)
                 .labelsHidden()
         }
@@ -122,7 +108,6 @@ struct AddProfileSheet: View {
     
     var body: some View {
         VStack(spacing: 24) {
-            // Header
             VStack(spacing: 8) {
                 Image(systemName: "folder.badge.plus")
                     .font(.system(size: 48))
@@ -134,9 +119,7 @@ struct AddProfileSheet: View {
             }
             .padding(.top)
             
-            // Form
             VStack(alignment: .leading, spacing: 16) {
-                // Profile Name
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Profile Name")
                         .fontWeight(.semibold)
@@ -144,7 +127,6 @@ struct AddProfileSheet: View {
                         .textFieldStyle(.roundedBorder)
                 }
                 
-                // Profile Type
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Backup Type")
                         .fontWeight(.semibold)
@@ -164,7 +146,6 @@ struct AddProfileSheet: View {
             
             Spacer()
             
-            // Actions
             HStack {
                 Button("Cancel") {
                     dismiss()
@@ -203,13 +184,11 @@ struct ProfileTypeCard: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                // Icon
                 Image(systemName: type.icon)
                     .font(.title2)
                     .foregroundColor(isSelected ? .blue : .secondary)
                     .frame(width: 40)
                 
-                // Info
                 VStack(alignment: .leading, spacing: 4) {
                     Text(type.displayName)
                         .fontWeight(.medium)
@@ -223,7 +202,6 @@ struct ProfileTypeCard: View {
                 
                 Spacer()
                 
-                // Selection indicator
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.blue)
@@ -245,35 +223,26 @@ struct ProfileTypeCard: View {
 
 struct ProfileDetailView: View {
     @Bindable var profile: BackupProfile
+    let modelContext: ModelContext
     @State private var showingDeleteConfirmation = false
+    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                // Header
                 profileHeader
-                
                 Divider()
-                
-                // Basic Settings
                 basicSettingsSection
-                
-                // Source Configuration
                 sourceSection
-                
-                // Destination Configuration
                 destinationSection
                 
-                // Type-specific settings
                 if profile.profileType == .versioned {
                     versionedSettingsSection
                 } else {
                     oneWaySyncSettingsSection
                 }
                 
-                // Statistics
                 statisticsSection
-                
                 Spacer()
             }
             .padding()
@@ -290,14 +259,13 @@ struct ProfileDetailView: View {
         .alert("Delete Profile?", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
-                deleteProfile()
+                modelContext.delete(profile)
+                try? modelContext.save()
             }
         } message: {
             Text("This will permanently delete \"\(profile.name)\". Backup data will not be deleted.")
         }
     }
-    
-    // MARK: - Header
     
     private var profileHeader: some View {
         HStack(spacing: 16) {
@@ -319,8 +287,6 @@ struct ProfileDetailView: View {
             }
         }
     }
-    
-    // MARK: - Basic Settings
     
     private var basicSettingsSection: some View {
         GroupBox("Basic Settings") {
@@ -344,8 +310,6 @@ struct ProfileDetailView: View {
             .padding()
         }
     }
-    
-    // MARK: - Source Section
     
     private var sourceSection: some View {
         GroupBox("Source Configuration") {
@@ -376,8 +340,6 @@ struct ProfileDetailView: View {
         }
     }
     
-    // MARK: - Destination Section
-    
     private var destinationSection: some View {
         GroupBox("Destination Configuration") {
             VStack(alignment: .leading, spacing: 12) {
@@ -399,8 +361,6 @@ struct ProfileDetailView: View {
         }
     }
     
-    // MARK: - Versioned Settings
-    
     private var versionedSettingsSection: some View {
         GroupBox("Version Settings") {
             VStack(alignment: .leading, spacing: 12) {
@@ -421,8 +381,6 @@ struct ProfileDetailView: View {
             .padding()
         }
     }
-    
-    // MARK: - One-Way Sync Settings
     
     private var oneWaySyncSettingsSection: some View {
         GroupBox("Sync Settings") {
@@ -458,8 +416,6 @@ struct ProfileDetailView: View {
         }
     }
     
-    // MARK: - Statistics
-    
     private var statisticsSection: some View {
         GroupBox("Statistics") {
             VStack(alignment: .leading, spacing: 8) {
@@ -486,8 +442,6 @@ struct ProfileDetailView: View {
         }
     }
     
-    // MARK: - Helper Methods
-    
     private func chooseSourcePath() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -508,9 +462,5 @@ struct ProfileDetailView: View {
         if panel.runModal() == .OK, let url = panel.url {
             profile.destinationPath = url.path
         }
-    }
-    
-    private func deleteProfile() {
-        // This would be handled by the parent view
     }
 }

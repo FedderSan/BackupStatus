@@ -37,7 +37,7 @@ extension BackupManager {
     // MARK: - Run All Profiles
     
     func runAllProfileBackups(force: Bool = false) async {
-        logManager.log("🚀 Running all enabled profile backups", level: .info)
+        logManager.log("🚀 Running all enabled profile backups (force: \(force))", level: .info)
         
         let profiles = await getEnabledProfiles()
         
@@ -97,7 +97,7 @@ extension BackupManager {
         }
     }
     
-    // MARK: - Versioned Backup (existing logic adapted)
+    // MARK: - Versioned Backup
     
     private func runVersionedBackup(_ profile: BackupProfile) async {
         logManager.log("📦 Running versioned backup for: \(profile.name)", level: .info)
@@ -144,14 +144,37 @@ extension BackupManager {
                     attributes: nil
                 )
                 
-                let sourceWithSlash = latestPath.hasSuffix("/") ? latestPath : "\(latestPath)/"
-                
-                // Try hard link copy first
-                let linkResult = await runHardLinkCopy(from: latestPath, to: versionPath)
+                // Try hard link copy first (inline implementation)
+                let linkResult: (success: Bool, error: String?) = await withCheckedContinuation { continuation in
+                    let task = Process()
+                    task.executableURL = URL(fileURLWithPath: "/bin/cp")
+                    
+                    let sourceWithDot = latestPath.hasSuffix("/") ? "\(latestPath)." : "\(latestPath)/."
+                    task.arguments = ["-al", sourceWithDot, versionPath]
+                    
+                    let errorPipe = Pipe()
+                    task.standardError = errorPipe
+                    
+                    do {
+                        try task.run()
+                        task.waitUntilExit()
+                        
+                        if task.terminationStatus == 0 {
+                            continuation.resume(returning: (true, nil))
+                        } else {
+                            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                            let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                            continuation.resume(returning: (false, errorOutput))
+                        }
+                    } catch {
+                        continuation.resume(returning: (false, error.localizedDescription))
+                    }
+                }
                 
                 if !linkResult.success {
                     logManager.log("⚠️ Hard link failed, using regular copy", level: .warning)
                     
+                    let sourceWithSlash = latestPath.hasSuffix("/") ? latestPath : "\(latestPath)/"
                     let versionResult = await runRsyncCommand(
                         from: sourceWithSlash,
                         to: versionPath,
@@ -180,7 +203,7 @@ extension BackupManager {
         }
     }
     
-    // MARK: - One-Way Sync Backup (NEW)
+    // MARK: - One-Way Sync Backup
     
     private func runOneWaySyncBackup(_ profile: BackupProfile) async {
         logManager.log("🔄 Running one-way sync for: \(profile.name)", level: .info)
