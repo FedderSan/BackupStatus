@@ -135,6 +135,21 @@ struct MenuBarView: View {
             
             Divider()
             
+            // In MenuBarView, update backup buttons:
+            Button("Run All Backups") {
+                Task { @MainActor [weak backupManager] in
+                    guard let backupManager = backupManager else { return }
+                    await backupManager.runAllProfileBackups(force: false)
+                }
+            }
+
+            Button("Force All Backups") {
+                Task { @MainActor [weak backupManager] in
+                    guard let backupManager = backupManager else { return }
+                    await backupManager.runAllProfileBackups(force: true)
+                }
+            }
+            
             Button("Test Connection") {
                 Task { @MainActor [weak backupManager] in
                     guard let backupManager = backupManager else { return }
@@ -156,6 +171,11 @@ struct MenuBarView: View {
             
             Button("Settings") {
                 safeOpenWindow("settings")
+            }
+            
+            // In MenuBarView.swift, add:
+            Button("Manage Profiles") {
+                safeOpenWindow("profiles")
             }
             
             // Debug Tools (shown when debug mode is enabled OR in DEBUG build)

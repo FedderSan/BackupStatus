@@ -551,7 +551,7 @@ class BackupManager: ObservableObject {
         )
     }
     
-    private func runHardLinkCopy(from source: String, to destination: String) async -> (success: Bool, error: String?) {
+    func runHardLinkCopy(from source: String, to destination: String) async -> (success: Bool, error: String?) {
         return await withCheckedContinuation { continuation in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/bin/cp")
@@ -593,7 +593,24 @@ class BackupManager: ObservableObject {
     }
     
     
-    
+    func migrateToProfiles() async {
+        let settings = await dataActor.getOrCreateSettings()
+        
+        // Create a profile from existing settings
+        let profile = BackupProfile(name: "Main Backup", profileType: .versioned)
+        profile.sourcePath = settings.sourcePath
+        profile.destinationPath = settings.localDestinationPath
+        profile.excludePatterns = settings.excludePatterns
+        profile.createVersions = settings.localCreateDatedFolders
+        profile.versionRetentionCount = settings.backupVersionRetentionCount
+        profile.backupIntervalHours = settings.backupIntervalHours
+        
+        let context = ModelContext(dataActor.modelContainer)
+        context.insert(profile)
+        try? context.save()
+        
+        logManager.log("✅ Migrated existing backup to profile system", level: .info)
+    }
     
     
     
