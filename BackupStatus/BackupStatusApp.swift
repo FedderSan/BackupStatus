@@ -20,7 +20,8 @@ struct BackupStatusApp: App {
         let schema = Schema([
             BackupSession.self,
             BackupSettings.self,
-            PersistentLogEntry.self  // Add this for persistent logs
+            PersistentLogEntry.self,  // Add this for persistent logs
+            BackupProfile.self  // ADD THIS
         ])
         
         // Create configuration with explicit store location in Application Support
@@ -117,6 +118,14 @@ struct BackupStatusApp: App {
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 800, height: 600)
+        
+        // In BackupStatusApp.swift, add a new window:
+        Window("Backup Profiles", id: "profiles") {
+            ProfileManagementView()
+                .modelContainer(modelContainer)
+        }
+        .windowResizability(.contentSize)
+        .defaultSize(width: 900, height: 600)
     }
     
     private var dynamicMenuBarIcon: String {
