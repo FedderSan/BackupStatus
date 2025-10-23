@@ -41,6 +41,10 @@ struct PreferencesView: View {
     // Debug Mode
     @AppStorage("debugModeEnabled") private var debugModeEnabled = false
     
+    // NEW: rsync status
+    @State private var rsyncStatus: RsyncStatus = .unknown
+    @State private var rsyncVersion: String?
+    
     @State private var showingPassword = false
     @State private var testResult = ""
     @State private var isTestingConnection = false
@@ -101,6 +105,7 @@ struct PreferencesView: View {
             if !hasLoadedInitialSettings {
                 loadSettings()
                 loadAutoStartSettings()
+                checkRsyncStatus()
                 hasLoadedInitialSettings = true
             }
         }
@@ -176,12 +181,15 @@ struct PreferencesView: View {
         )
     }
     
-    // MARK: - NEW: Advanced Tab
+    // MARK: - NEW: Advanced Tab with rsync Status
     
     private var advancedTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 sectionHeader("Advanced Settings", icon: "wrench.and.screwdriver")
+                
+                // NEW: rsync Status Section
+                rsyncStatusSection
                 
                 // Debug Mode Section
                 VStack(alignment: .leading, spacing: 16) {
@@ -262,6 +270,182 @@ struct PreferencesView: View {
                 Spacer()
             }
             .padding()
+        }
+    }
+    
+    // MARK: - NEW: rsync Status Section
+    
+    private var rsyncStatusSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Required Tools")
+                    .fontWeight(.semibold)
+                
+                Spacer()
+                
+                Button(action: checkRsyncStatus) {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+            }
+            
+            VStack(alignment: .leading, spacing: 12) {
+                // rsync status card
+                HStack(spacing: 12) {
+                    Image(systemName: rsyncStatus.icon)
+                        .font(.title2)
+                        .foregroundColor(rsyncStatus.color)
+                        .frame(width: 40)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("GNU rsync")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        
+                        Text(rsyncStatus.message)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        if let version = rsyncVersion {
+                            Text(version)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    if rsyncStatus == .notInstalled || rsyncStatus == .openRsync {
+                        Button(action: openInstallInstructions) {
+                            Label("Install", systemImage: "arrow.down.circle.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding()
+                .background(rsyncStatus.backgroundColor)
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(rsyncStatus.color.opacity(0.3), lineWidth: 2)
+                )
+                
+                // Installation instructions (when needed)
+                if rsyncStatus == .notInstalled || rsyncStatus == .openRsync {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text("Why do I need this?")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                        }
+                        
+                        Text("macOS includes openrsync, which is not fully compatible with this app. You need to install the real GNU rsync from Homebrew.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Installation steps:")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                            
+                            VStack(alignment: .leading, spacing: 6) {
+                                installStep(number: 1, text: "Open Terminal app")
+                                installStep(number: 2, text: "Run: brew install rsync")
+                                installStep(number: 3, text: "Click 'Refresh' above to verify")
+                            }
+                        }
+                        
+                        HStack(spacing: 8) {
+                            Button(action: openTerminal) {
+                                Label("Open Terminal", systemImage: "terminal")
+                            }
+                            
+                            Button(action: copyInstallCommand) {
+                                Label("Copy Command", systemImage: "doc.on.doc")
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .padding()
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+                }
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
+        }
+    }
+    
+    // MARK: - rsync Status Helpers
+    
+    private func installStep(number: Int, text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("\(number).")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+                .frame(width: 20)
+            
+            Text(text)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    private func checkRsyncStatus() {
+        // Create a temporary BackupManager just to check rsync
+        let tempContainer = try? ModelContainer(for: BackupSettings.self)
+        guard let container = tempContainer else {
+            rsyncStatus = .unknown
+            return
+        }
+        
+        let tempLogManager = LogManager(modelContainer: container)
+        let tempManager = BackupManager(modelContainer: container, logManager: tempLogManager)
+        
+        if let rsyncPath = tempManager.realRsyncPath {
+            rsyncStatus = .installed
+            rsyncVersion = tempManager.getRsyncVersion()
+        } else {
+            // Check if openrsync exists
+            if FileManager.default.fileExists(atPath: "/usr/bin/rsync") {
+                rsyncStatus = .openRsync
+                rsyncVersion = "macOS openrsync (not compatible)"
+            } else {
+                rsyncStatus = .notInstalled
+                rsyncVersion = nil
+            }
+        }
+    }
+    
+    private func openInstallInstructions() {
+        if let url = URL(string: "https://brew.sh/") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+    
+    private func openTerminal() {
+        NSWorkspace.shared.launchApplication("Terminal")
+    }
+    
+    private func copyInstallCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("brew install rsync", forType: .string)
+        
+        // Show brief confirmation
+        testResult = "✅ Command copied to clipboard"
+        
+        // Clear after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            if testResult.contains("clipboard") {
+                testResult = ""
+            }
         }
     }
     
@@ -386,8 +570,7 @@ struct PreferencesView: View {
         }
     }
     
-    // MARK: - Keep all other tabs as they were...
-    // (sourceTab, destinationTab, dataManagementTab remain unchanged)
+    // MARK: - Source Tab
     
     private var sourceTab: some View {
         ScrollView {
@@ -471,6 +654,8 @@ struct PreferencesView: View {
             .padding()
         }
     }
+    
+    // MARK: - Destination Tab (rest of the code continues...)
     
     private var destinationTab: some View {
         ScrollView {
@@ -1070,6 +1255,7 @@ struct PreferencesView: View {
         let scheme = webdavUseHTTPS ? "https" : "http"
         let port = Int(serverPort) != (webdavUseHTTPS ? 443 : 80) ? ":\(serverPort)" : ""
         let cleanURL = webdavURL.hasPrefix("/") ? webdavURL : "/\(webdavURL)"
+        
         return "\(scheme)://\(serverHost)\(port)\(cleanURL)"
     }
     
@@ -1345,6 +1531,51 @@ struct PreferencesView: View {
                 }
                 continuation.resume(returning: false)
             }
+        }
+    }
+}
+
+// MARK: - NEW: rsync Status Enum
+
+enum RsyncStatus {
+    case unknown
+    case installed
+    case notInstalled
+    case openRsync
+    
+    var icon: String {
+        switch self {
+        case .unknown: return "questionmark.circle"
+        case .installed: return "checkmark.circle.fill"
+        case .notInstalled: return "xmark.circle.fill"
+        case .openRsync: return "exclamationmark.triangle.fill"
+        }
+    }
+    
+    var color: Color {
+        switch self {
+        case .unknown: return .gray
+        case .installed: return .green
+        case .notInstalled: return .red
+        case .openRsync: return .orange
+        }
+    }
+    
+    var message: String {
+        switch self {
+        case .unknown: return "Checking..."
+        case .installed: return "Real GNU rsync is installed"
+        case .notInstalled: return "rsync is not installed"
+        case .openRsync: return "Only macOS openrsync found (not compatible)"
+        }
+    }
+    
+    var backgroundColor: Color {
+        switch self {
+        case .unknown: return Color.gray.opacity(0.1)
+        case .installed: return Color.green.opacity(0.1)
+        case .notInstalled: return Color.red.opacity(0.1)
+        case .openRsync: return Color.orange.opacity(0.1)
         }
     }
 }

@@ -10,6 +10,7 @@ import Foundation
 extension BackupManager {
     // MARK: - Enhanced Initialization
     
+       
     func performInitialization() async {
         logManager.log("🚀 BackupManager initialization started", level: .info)
         
@@ -81,13 +82,24 @@ extension BackupManager {
             logManager.log("⚠️ rclone not found at: \(rclonePath)", level: .warning)
         }
         
-        // Check rsync
-        let rsyncPath = "/usr/bin/rsync"
-        let rsyncExists = FileManager.default.fileExists(atPath: rsyncPath)
-        if rsyncExists {
-            logManager.log("✅ rsync found at: \(rsyncPath)", level: .debug)
+        // Check rsync (NEW: Check for real GNU rsync)
+        if let realRsyncPath = self.realRsyncPath {
+            logManager.log("✅ Real GNU rsync found at: \(realRsyncPath)", level: .debug)
+            	
+            // Get and log version
+            if let version = self.getRsyncVersion() {
+                logManager.log("📦 rsync version: \(version)", level: .debug)
+            }
         } else {
-            logManager.log("⚠️ rsync not found at: \(rsyncPath)", level: .warning)
+            logManager.log("⚠️ Real GNU rsync not found", level: .warning)
+            logManager.log("💡 Install with: brew install rsync", level: .warning)
+            logManager.log("ℹ️ macOS includes openrsync which is not fully compatible", level: .info)
+            
+            // Check if openrsync exists at standard location
+            let openRsyncPath = "/usr/bin/rsync"
+            if FileManager.default.fileExists(atPath: openRsyncPath) {
+                logManager.log("ℹ️ Found macOS openrsync at \(openRsyncPath) (not compatible)", level: .info)
+            }
         }
         
         // Check curl
