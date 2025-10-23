@@ -167,12 +167,13 @@ extension BackupManager {
                 
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let output = String(data: data, encoding: .utf8) ?? ""
-                let fileCount = output.split(separator: "\n").count
+                let fileCount = output.split(separator: "\n").filter { !$0.isEmpty }.count
                 
-                // Get total size using du
+                // Get total size using du with macOS-compatible flags
                 let duTask = Process()
                 duTask.executableURL = URL(fileURLWithPath: "/usr/bin/du")
-                duTask.arguments = ["-sb", path]
+                // Use -sk for kilobytes (macOS compatible), then multiply by 1024
+                duTask.arguments = ["-sk", path]
                 
                 let duPipe = Pipe()
                 duTask.standardOutput = duPipe
@@ -183,7 +184,8 @@ extension BackupManager {
                 let duData = duPipe.fileHandleForReading.readDataToEndOfFile()
                 let duOutput = String(data: duData, encoding: .utf8) ?? ""
                 let sizeString = duOutput.split(separator: "\t").first?.trimmingCharacters(in: .whitespaces) ?? "0"
-                let totalSize = Int64(sizeString) ?? 0
+                let sizeInKB = Int64(sizeString) ?? 0
+                let totalSize = sizeInKB * 1024 // Convert KB to bytes
                 
                 continuation.resume(returning: (fileCount, totalSize))
             } catch {

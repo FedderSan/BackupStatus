@@ -1,13 +1,54 @@
 //
-//  BackupManager+Profiles.swift
+//  BackupManager+Profiles.swift - FIXED VERSION
 //  BackupStatus
 //
-//  Multi-profile backup support
+//  Multi-profile backup support with REAL rsync
 //
 
 import Foundation
 
 extension BackupManager {
+    
+    // MARK: - Get Real Rsync Path
+    
+    private func getRealRsyncPath() -> String? {
+        let possiblePaths = [
+            "/opt/homebrew/bin/rsync",  // Apple Silicon Homebrew
+            "/usr/local/bin/rsync",     // Intel Homebrew
+        ]
+        
+        for path in possiblePaths {
+            if FileManager.default.fileExists(atPath: path) {
+                // Verify it's real rsync, not openrsync
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: path)
+                task.arguments = ["--version"]
+                
+                let pipe = Pipe()
+                task.standardOutput = pipe
+                
+                do {
+                    try task.run()
+                    task.waitUntilExit()
+                    
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    if let output = String(data: data, encoding: .utf8),
+                       !output.contains("openrsync"),
+                       output.contains("rsync  version") {
+                        logManager.log("✅ Found real GNU rsync at: \(path)", level: .debug)
+                        return path
+                    } else {
+                        logManager.log("⚠️ Found openrsync at \(path), skipping", level: .debug)
+                    }
+                } catch {
+                    continue
+                }
+            }
+        }
+        
+        logManager.log("❌ Real GNU rsync not found. Please install: brew install rsync", level: .error)
+        return nil
+    }
     
     // MARK: - Profile Management
     
@@ -144,32 +185,8 @@ extension BackupManager {
                     attributes: nil
                 )
                 
-                // Try hard link copy first (inline implementation)
-                let linkResult: (success: Bool, error: String?) = await withCheckedContinuation { continuation in
-                    let task = Process()
-                    task.executableURL = URL(fileURLWithPath: "/bin/cp")
-                    
-                    let sourceWithDot = latestPath.hasSuffix("/") ? "\(latestPath)." : "\(latestPath)/."
-                    task.arguments = ["-al", sourceWithDot, versionPath]
-                    
-                    let errorPipe = Pipe()
-                    task.standardError = errorPipe
-                    
-                    do {
-                        try task.run()
-                        task.waitUntilExit()
-                        
-                        if task.terminationStatus == 0 {
-                            continuation.resume(returning: (true, nil))
-                        } else {
-                            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                            let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
-                            continuation.resume(returning: (false, errorOutput))
-                        }
-                    } catch {
-                        continuation.resume(returning: (false, error.localizedDescription))
-                    }
-                }
+                // Try hard link copy first
+                let linkResult = await runHardLinkCopy(from: latestPath, to: versionPath)
                 
                 if !linkResult.success {
                     logManager.log("⚠️ Hard link failed, using regular copy", level: .warning)
@@ -203,10 +220,17 @@ extension BackupManager {
         }
     }
     
-    // MARK: - One-Way Sync Backup
+    // MARK: - One-Way Sync Backup (FIXED FOR REAL RSYNC)
     
     private func runOneWaySyncBackup(_ profile: BackupProfile) async {
         logManager.log("🔄 Running one-way sync for: \(profile.name)", level: .info)
+        
+        // Check if real rsync is available
+        guard getRealRsyncPath() != nil else {
+            logManager.log("❌ Cannot run one-way sync: Real GNU rsync required", level: .error)
+            logManager.log("💡 Install with: brew install rsync", level: .error)
+            return
+        }
         
         let fileManager = FileManager.default
         let date = Date()
@@ -231,7 +255,6 @@ extension BackupManager {
             // Handle deletions with trash folder
             if profile.useTrashFolder {
                 let trashPath = profile.trashPath()
-                try fileManager.createDirectory(atPath: trashPath, withIntermediateDirectories: true, attributes: nil)
                 
                 // Create timestamped trash subdirectory
                 let dateFormatter = DateFormatter()
@@ -239,6 +262,11 @@ extension BackupManager {
                 let trashTimestamp = dateFormatter.string(from: date)
                 let trashSessionPath = "\(trashPath)/\(trashTimestamp)"
                 
+                // Create the trash session directory BEFORE rsync runs
+                try fileManager.createDirectory(atPath: trashSessionPath, withIntermediateDirectories: true, attributes: nil)
+                
+                logManager.log("🗑️ Created trash folder: \(trashSessionPath)", level: .info)
+                logManager.log("📁 Trash folder exists: \(fileManager.fileExists(atPath: trashSessionPath))", level: .debug)
                 logManager.log("🗑️ Using trash folder: \(trashSessionPath)", level: .debug)
                 
                 // Sync with --backup-dir to move deleted/changed files to trash
@@ -252,6 +280,48 @@ extension BackupManager {
                 guard syncResult.success else {
                     logManager.log("❌ One-way sync failed: \(syncResult.error ?? "Unknown")", level: .error)
                     return
+                }
+                
+                // Log what ended up in trash
+                if let trashContents = try? fileManager.contentsOfDirectory(atPath: trashSessionPath) {
+                    if trashContents.isEmpty {
+                        logManager.log("ℹ️ Trash folder is empty - checking if this is expected...", level: .info)
+                        
+                        // Check source and destination to understand why
+                        let sourceContents = (try? fileManager.contentsOfDirectory(atPath: profile.fullSourcePath)) ?? []
+                        let destContents = (try? fileManager.contentsOfDirectory(atPath: destinationPath)) ?? []
+                        
+                        logManager.log("📊 Source has \(sourceContents.count) items", level: .debug)
+                        logManager.log("📊 Destination has \(destContents.count) items", level: .debug)
+                        
+                        // Find items in destination but not in source
+                        let destSet = Set(destContents)
+                        let sourceSet = Set(sourceContents)
+                        let shouldBeDeleted = destSet.subtracting(sourceSet).filter { !$0.hasPrefix(".") }
+                        
+                        if !shouldBeDeleted.isEmpty {
+                            logManager.log("⚠️ Found \(shouldBeDeleted.count) items that should have been deleted:", level: .warning)
+                            for item in Array(shouldBeDeleted.prefix(10)) {
+                                logManager.log("  ❓ \(item)", level: .warning)
+                            }
+                        } else {
+                            logManager.log("✅ No unexpected files in destination - sync is correct", level: .info)
+                        }
+                    } else {
+                        logManager.log("🗑️ Moved \(trashContents.count) items to trash:", level: .info)
+                        for item in trashContents.prefix(20) {
+                            let itemPath = "\(trashSessionPath)/\(item)"
+                            if let attrs = try? fileManager.attributesOfItem(atPath: itemPath),
+                               let size = attrs[.size] as? Int64 {
+                                logManager.log("  📄 \(item) (\(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)))", level: .info)
+                            } else {
+                                logManager.log("  📄 \(item)", level: .info)
+                            }
+                        }
+                        if trashContents.count > 20 {
+                            logManager.log("  ... and \(trashContents.count - 20) more", level: .info)
+                        }
+                    }
                 }
                 
                 // Clean up old trash if auto-empty is enabled
@@ -288,7 +358,7 @@ extension BackupManager {
         }
     }
     
-    // MARK: - rsync with Trash Support
+    // MARK: - rsync with Trash Support (FIXED FOR REAL RSYNC)
     
     private func runRsyncWithTrash(
         from source: String,
@@ -296,46 +366,59 @@ extension BackupManager {
         trashDir: String,
         excludePatterns: [String] = []
     ) async -> (success: Bool, error: String?) {
-        let rsyncPath = "/usr/bin/rsync"
-        guard FileManager.default.fileExists(atPath: rsyncPath) else {
-            logManager.log("❌ rsync not found at: \(rsyncPath)", level: .error)
-            return (false, "rsync not found")
+        guard let rsyncPath = getRealRsyncPath() else {
+            return (false, "Real GNU rsync not found. Install with: brew install rsync")
         }
         
         return await withCheckedContinuation { continuation in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: rsyncPath)
             
+            // Ensure both source and destination have trailing slashes
+            let sourceWithSlash = source.hasSuffix("/") ? source : "\(source)/"
+            let destWithSlash = destination.hasSuffix("/") ? destination : "\(destination)/"
+            
             var arguments = [
                 "-avh",
                 "--progress",
                 "--delete",
                 "--backup",
-                "--backup-dir=\(trashDir)"
+                "--backup-dir=\(trashDir)",  // Absolute path works with real rsync
+                "--suffix=",
             ]
             
             // Add exclude patterns
             arguments.append(contentsOf: excludePatterns)
             
-            arguments.append(source)
-            arguments.append(destination)
+            arguments.append(sourceWithSlash)
+            arguments.append(destWithSlash)
             
             task.arguments = arguments
             
+            let outputPipe = Pipe()
             let errorPipe = Pipe()
+            task.standardOutput = outputPipe
             task.standardError = errorPipe
             
             do {
                 logManager.log("🔧 Running rsync with trash: \(trashDir)", level: .debug)
+                logManager.log("📝 Command: rsync \(arguments.joined(separator: " "))", level: .debug)
                 try task.run()
                 task.waitUntilExit()
                 
+                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let outputString = String(data: outputData, encoding: .utf8) ?? ""
+                
                 if task.terminationStatus == 0 {
+                    if !outputString.isEmpty {
+                        logManager.log("📊 rsync output:\n\(outputString)", level: .debug)
+                    }
                     continuation.resume(returning: (true, nil))
                 } else {
                     let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                     let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
-                    logManager.log("❌ rsync failed with code \(task.terminationStatus): \(errorOutput)", level: .error)
+                    logManager.log("❌ rsync failed with code \(task.terminationStatus)", level: .error)
+                    logManager.log("❌ Error: \(errorOutput)", level: .error)
                     continuation.resume(returning: (false, errorOutput))
                 }
             } catch {
@@ -423,4 +506,5 @@ extension BackupManager {
             logManager.log("❌ Failed to empty trash: \(error)", level: .error)
         }
     }
+    
 }
