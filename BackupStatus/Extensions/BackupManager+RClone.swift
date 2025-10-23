@@ -82,7 +82,7 @@ extension BackupManager {
         return (true, nil, stats.fileCount, stats.totalSize)
     }
     
-    // MARK: - rsync Command (Updated for iCloud compatibility)
+    // MARK: - rsync Command (Updated to use real rsync path)
     
     func runRsyncCommand(
         from source: String,
@@ -91,11 +91,13 @@ extension BackupManager {
         excludePatterns: [String] = [],
         preserveTimestamps: Bool = true
     ) async -> (success: Bool, error: String?) {
-        let rsyncPath = "/usr/bin/rsync"
-        guard FileManager.default.fileExists(atPath: rsyncPath) else {
-            logManager.log("❌ rsync not found at: \(rsyncPath)", level: .error)
-            return (false, "rsync not found")
+        // Use real rsync path instead of hardcoded path
+        guard let rsyncPath = realRsyncPath else {
+            logManager.log("❌ Real GNU rsync not found. Install with: brew install rsync", level: .error)
+            return (false, "Real GNU rsync not found. Please install with: brew install rsync")
         }
+        
+        logManager.log("✅ Using real GNU rsync at: \(rsyncPath)", level: .debug)
         
         return await withCheckedContinuation { continuation in
             let task = Process()

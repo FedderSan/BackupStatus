@@ -9,47 +9,6 @@ import Foundation
 
 extension BackupManager {
     
-    // MARK: - Get Real Rsync Path
-    
-    private func getRealRsyncPath() -> String? {
-        let possiblePaths = [
-            "/opt/homebrew/bin/rsync",  // Apple Silicon Homebrew
-            "/usr/local/bin/rsync",     // Intel Homebrew
-        ]
-        
-        for path in possiblePaths {
-            if FileManager.default.fileExists(atPath: path) {
-                // Verify it's real rsync, not openrsync
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: path)
-                task.arguments = ["--version"]
-                
-                let pipe = Pipe()
-                task.standardOutput = pipe
-                
-                do {
-                    try task.run()
-                    task.waitUntilExit()
-                    
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    if let output = String(data: data, encoding: .utf8),
-                       !output.contains("openrsync"),
-                       output.contains("rsync  version") {
-                        logManager.log("✅ Found real GNU rsync at: \(path)", level: .debug)
-                        return path
-                    } else {
-                        logManager.log("⚠️ Found openrsync at \(path), skipping", level: .debug)
-                    }
-                } catch {
-                    continue
-                }
-            }
-        }
-        
-        logManager.log("❌ Real GNU rsync not found. Please install: brew install rsync", level: .error)
-        return nil
-    }
-    
     // MARK: - Profile Management
     
     func getAllProfiles() async -> [BackupProfile] {
@@ -143,6 +102,13 @@ extension BackupManager {
     private func runVersionedBackup(_ profile: BackupProfile) async {
         logManager.log("📦 Running versioned backup for: \(profile.name)", level: .info)
         
+        // Check if rsync is available
+        guard hasRealRsync else {
+            logManager.log("❌ Cannot run versioned backup: Real GNU rsync required", level: .error)
+            logManager.log("💡 Install with: brew install rsync", level: .error)
+            return
+        }
+        
         let fileManager = FileManager.default
         let date = Date()
         
@@ -226,7 +192,7 @@ extension BackupManager {
         logManager.log("🔄 Running one-way sync for: \(profile.name)", level: .info)
         
         // Check if real rsync is available
-        guard getRealRsyncPath() != nil else {
+        guard hasRealRsync else {
             logManager.log("❌ Cannot run one-way sync: Real GNU rsync required", level: .error)
             logManager.log("💡 Install with: brew install rsync", level: .error)
             return
@@ -366,7 +332,7 @@ extension BackupManager {
         trashDir: String,
         excludePatterns: [String] = []
     ) async -> (success: Bool, error: String?) {
-        guard let rsyncPath = getRealRsyncPath() else {
+        guard let rsyncPath = realRsyncPath else {
             return (false, "Real GNU rsync not found. Install with: brew install rsync")
         }
         
