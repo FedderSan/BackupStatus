@@ -181,14 +181,14 @@ struct PreferencesView: View {
         )
     }
     
-    // MARK: - NEW: Advanced Tab with rsync Status
+    // MARK: - Advanced Tab with rsync Status
     
     private var advancedTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 sectionHeader("Advanced Settings", icon: "wrench.and.screwdriver")
                 
-                // NEW: rsync Status Section
+                // rsync Status Section
                 rsyncStatusSection
                 
                 // Debug Mode Section
@@ -273,7 +273,7 @@ struct PreferencesView: View {
         }
     }
     
-    // MARK: - NEW: rsync Status Section
+    // MARK: - rsync Status Section
     
     private var rsyncStatusSection: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -317,11 +317,27 @@ struct PreferencesView: View {
                     
                     Spacer()
                     
+                    // Show install button when not installed or only openrsync
                     if rsyncStatus == .notInstalled || rsyncStatus == .openRsync {
-                        Button(action: openInstallInstructions) {
+                        Menu {
+                            Button(action: openTerminal) {
+                                Label("Open Terminal", systemImage: "terminal")
+                            }
+                            
+                            Button(action: copyInstallCommand) {
+                                Label("Copy Install Command", systemImage: "doc.on.doc")
+                            }
+                            
+                            Divider()
+                            
+                            Button(action: openInstallInstructions) {
+                                Label("View Homebrew Instructions", systemImage: "safari")
+                            }
+                        } label: {
                             Label("Install", systemImage: "arrow.down.circle.fill")
                         }
-                        .buttonStyle(.borderedProminent)
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
                     }
                 }
                 .padding()
@@ -338,15 +354,22 @@ struct PreferencesView: View {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundColor(.orange)
-                            Text("Why do I need this?")
+                            Text("Action Required")
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
                         }
                         
-                        Text("macOS includes openrsync, which is not fully compatible with this app. You need to install the real GNU rsync from Homebrew.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        if rsyncStatus == .openRsync {
+                            Text("macOS includes openrsync, which is not fully compatible with this app. You need to install the real GNU rsync from Homebrew.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            Text("This app requires GNU rsync for advanced backup features. Install it using Homebrew.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Installation steps:")
@@ -354,9 +377,10 @@ struct PreferencesView: View {
                                 .fontWeight(.semibold)
                             
                             VStack(alignment: .leading, spacing: 6) {
-                                installStep(number: 1, text: "Open Terminal app")
-                                installStep(number: 2, text: "Run: brew install rsync")
-                                installStep(number: 3, text: "Click 'Refresh' above to verify")
+                                installStep(number: 1, text: "Install Homebrew (if not installed): brew.sh")
+                                installStep(number: 2, text: "Open Terminal app")
+                                installStep(number: 3, text: "Run: brew install rsync")
+                                installStep(number: 4, text: "Click 'Refresh' above to verify")
                             }
                         }
                         
@@ -367,6 +391,10 @@ struct PreferencesView: View {
                             
                             Button(action: copyInstallCommand) {
                                 Label("Copy Command", systemImage: "doc.on.doc")
+                            }
+                            
+                            Button(action: openInstallInstructions) {
+                                Label("Homebrew Website", systemImage: "safari")
                             }
                         }
                         .buttonStyle(.borderless)
@@ -655,7 +683,7 @@ struct PreferencesView: View {
         }
     }
     
-    // MARK: - Destination Tab (rest of the code continues...)
+    // MARK: - Destination Tab
     
     private var destinationTab: some View {
         ScrollView {
@@ -1535,7 +1563,7 @@ struct PreferencesView: View {
     }
 }
 
-// MARK: - NEW: rsync Status Enum
+// MARK: - rsync Status Enum
 
 enum RsyncStatus {
     case unknown
