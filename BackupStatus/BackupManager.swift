@@ -82,32 +82,28 @@ class BackupManager: ObservableObject {
         statusUpdateTask?.cancel()
     }
     
-    // MARK: - Connection Testing
+    // MARK: - Connection Testing (Profile-Based)
     
     func runConnectionTest() async {
-        logManager.log("Starting connection test", level: .info)
+        logManager.log("🔍 Starting connection test for all enabled profiles", level: .info)
         updateConnectionStatus(.testing)
         
-        guard let settings = await dataActor.getSettings() else {
+        // Get all enabled profiles
+        let profiles = await getEnabledProfiles()
+        
+        guard !profiles.isEmpty else {
             updateConnectionStatus(.failed)
-            logManager.log("No settings found for connection test", level: .error)
+            logManager.log("❌ No enabled profiles to test", level: .error)
             return
         }
         
-        let isConnected: Bool
+        logManager.log("📋 Testing \(profiles.count) enabled profile(s)", level: .info)
         
-        switch settings.remoteType {
-        case .local:
-            isConnected = await testLocalConnection(settings)
-        case .webdav:
-            isConnected = await testConnection(settings)
-        default:
-            isConnected = false
-            logManager.log("Connection test not implemented for \(settings.remoteType.displayName)", level: .error)
-        }
+        // Test connection for all enabled profiles
+        let isConnected = await testConnection()
         
         updateConnectionStatus(isConnected ? .connected : .failed)
-        logManager.log("Connection test result: \(isConnected ? "SUCCESS" : "FAILED")", level: isConnected ? .info : .error)
+        logManager.log("Connection test result: \(isConnected ? "✅ SUCCESS" : "❌ FAILED")", level: isConnected ? .info : .error)
     }
     
     // MARK: - Hard Link Copy (Used by Profile Backups)
