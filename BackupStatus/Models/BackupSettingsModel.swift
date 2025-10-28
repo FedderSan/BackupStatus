@@ -9,32 +9,32 @@ class BackupSettings {
     var backupIntervalHours: Int
     var lastSuccessfulBackup: Date?
     
-    // Source Configuration
+    // DEPRECATED: These fields are kept for backward compatibility but should use profiles instead
     var sourcePath: String
-    var excludePatterns: String  // Comma-separated patterns to exclude
+    var excludePatterns: String
     
-    // WebDAV Configuration
+    // WebDAV Configuration (kept for future use)
     var webdavEnabled: Bool
-    var webdavURL: String  // Path part only: "/remote.php/dav/files/daniel"
+    var webdavURL: String
     var webdavUsername: String
     var webdavPasswordObscured: String
-    var webdavPath: String  // Backup folder: "/BackupFolderLaptop"
+    var webdavPath: String
     var webdavUseHTTPS: Bool
     var webdavVerifySSL: Bool
     
-    // Local/Network Drive Configuration
-    var localDestinationPath: String  // e.g., "/Users/df/filen/backups"
-    var localCreateDatedFolders: Bool  // Whether to create dated subfolders
+    // DEPRECATED: Use profiles instead
+    var localDestinationPath: String
+    var localCreateDatedFolders: Bool
     
-    // Remote Configuration
+    // Remote Configuration (kept for future use)
     var remoteName: String
     var remoteType: RemoteType
     
-    // Log Management Settings
-    var logRetentionDays: Int  // Store as int for SwiftData compatibility
+    // Log Management Settings (Still used globally)
+    var logRetentionDays: Int
     
-    // NEW: Backup Version Management Settings
-    var backupVersionRetentionCount: Int  // Store as int for SwiftData compatibility
+    // DEPRECATED: Use profile-specific retention instead
+    var backupVersionRetentionCount: Int
     
     var logRetentionPeriod: LogRetentionPeriod {
         get {
@@ -60,36 +60,35 @@ class BackupSettings {
         self.serverPort = 8081
         self.backupIntervalHours = 24
         
-        // Source defaults
-        self.sourcePath = "/Users/danielfeddersen/Library/CloudStorage/OneDrive-Personal/workOnedrive"
+        // Source defaults (deprecated)
+        self.sourcePath = ""
         self.excludePatterns = ".DS_Store,*.tmp,*.cache"
         
         // WebDAV defaults
         self.webdavEnabled = true
         self.webdavURL = "/remote.php/dav/files/daniel"
-        self.webdavUsername = "danielfeddersen@gmail.com"
+        self.webdavUsername = ""
         self.webdavPasswordObscured = ""
-        self.webdavPath = "/BackupFolderLaptop"
+        self.webdavPath = ""
         self.webdavUseHTTPS = false
         self.webdavVerifySSL = true
         
-        // Local defaults
-        self.localDestinationPath = "/Users/danielfeddersen/Library/Mobile Documents/com~apple~CloudDocs/BackupOneDrive"
+        // Local defaults (deprecated)
+        self.localDestinationPath = ""
         self.localCreateDatedFolders = true
         
         // Remote defaults
         self.remoteName = "backup-remote"
-        self.remoteType = .local  // Default to local now
+        self.remoteType = .local
         
         // Retention defaults
         self.logRetentionDays = LogRetentionPeriod.days30.rawValue
-        self.backupVersionRetentionCount = BackupVersionRetention.versions14.rawValue  // NEW: Default to 14 versions
+        self.backupVersionRetentionCount = BackupVersionRetention.versions14.rawValue
     }
     
-    // MARK: - Source Path Helpers
+    // MARK: - Source Path Helpers (Kept for migration/debugging)
     
     var fullSourcePath: String {
-        // Ensure path ends with trailing slash for rsync/rclone
         return sourcePath.hasSuffix("/") ? sourcePath : sourcePath + "/"
     }
     
@@ -103,6 +102,8 @@ class BackupSettings {
     }
     
     func getSourceInfo() -> (fileCount: Int, totalSize: Int64)? {
+        guard !sourcePath.isEmpty else { return nil }
+        
         let fileManager = FileManager.default
         var fileCount = 0
         var totalSize: Int64 = 0
@@ -133,7 +134,7 @@ class BackupSettings {
             .filter { !$0.isEmpty }
     }
     
-    // MARK: - Password Management
+    // MARK: - Password Management (Kept for WebDAV future use)
     
     func setPassword(_ plainPassword: String) async {
         if let obscured = await RclonePasswordHelper.shared.obscurePassword(plainPassword) {
@@ -149,7 +150,7 @@ class BackupSettings {
         return await RclonePasswordHelper.shared.revealPassword(webdavPasswordObscured)
     }
     
-    // MARK: - URL Construction
+    // MARK: - URL Construction (Kept for WebDAV future use)
     
     var fullWebDAVURL: String {
         let scheme = webdavUseHTTPS ? "https" : "http"
@@ -165,7 +166,7 @@ class BackupSettings {
         return baseURL + cleanPath
     }
     
-    // MARK: - Local Path Construction
+    // MARK: - Local Path Construction (Kept for backward compatibility)
     
     var fullLocalDestinationPath: String {
         switch remoteType {
@@ -178,66 +179,7 @@ class BackupSettings {
         }
     }
     
-    func localLatestPath() -> String {
-        let basePath = fullLocalDestinationPath
-        return "\(basePath)/latest"
-    }
-    
-    func localVersionPath(for date: Date = Date()) -> String {
-        let basePath = fullLocalDestinationPath
-        
-        if localCreateDatedFolders {
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-            let dateString = dateFormatter.string(from: date)
-            return "\(basePath)/versions/\(dateString)"
-        } else {
-            // If versioning is disabled, only update latest
-            return localLatestPath()
-        }
-    }
-    
-    // MARK: - NEW: Version Management Helpers
-    
-    func versionsDirectoryPath() -> String {
-        return "\(fullLocalDestinationPath)/versions"
-    }
-    
-    func getExistingVersions() -> [String] {
-        let versionsDir = versionsDirectoryPath()
-        
-        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: versionsDir) else {
-            return []
-        }
-        
-        // Filter and sort version directories (assuming they're date-formatted)
-        return contents
-            .filter { item in
-                var isDirectory: ObjCBool = false
-                let fullPath = "\(versionsDir)/\(item)"
-                return FileManager.default.fileExists(atPath: fullPath, isDirectory: &isDirectory) && isDirectory.boolValue
-            }
-            .sorted() // This will sort lexicographically, which works for our date format
-    }
-    
-    func shouldCleanupVersions() -> Bool {
-        return backupVersionRetention.shouldCleanup
-    }
-    
-    func getVersionsToCleanup() -> [String] {
-        guard shouldCleanupVersions() else { return [] }
-        
-        let existingVersions = getExistingVersions()
-        let maxVersions = backupVersionRetention.rawValue
-        
-        guard existingVersions.count > maxVersions else { return [] }
-        
-        // Return the oldest versions to delete (keep the newest ones)
-        let versionsToDelete = existingVersions.count - maxVersions
-        return Array(existingVersions.prefix(versionsToDelete))
-    }
-    
-    // MARK: - rclone Configuration
+    // MARK: - rclone Configuration (Kept for WebDAV future use)
     
     func generateRcloneConfig() -> String {
         switch remoteType {
@@ -246,7 +188,6 @@ class BackupSettings {
         case .local:
             return generateLocalConfig()
         case .s3, .sftp, .ftp:
-            // Placeholder for future implementations
             return generatePlaceholderConfig()
         }
     }
@@ -283,14 +224,16 @@ class BackupSettings {
         """
     }
     
-    // MARK: - Validation
+    // MARK: - Validation (Kept for backward compatibility and migration)
     
     func validateConfiguration() -> (isValid: Bool, errors: [String]) {
         var errors: [String] = []
         
-        // Validate source path
+        // Note: Most validation should now be done at the profile level
+        // This is kept for backward compatibility
+        
         if sourcePath.isEmpty {
-            errors.append("Source path is required")
+            errors.append("Source path is required (use profiles instead)")
         } else if !sourceExists {
             errors.append("Source path does not exist: \(sourcePath)")
         } else if !sourceIsReadable {
@@ -300,10 +243,9 @@ class BackupSettings {
         switch remoteType {
         case .local:
             if localDestinationPath.isEmpty {
-                errors.append("Local destination path is required")
+                errors.append("Local destination path is required (use profiles instead)")
             }
             
-            // Check if path exists and is writable
             let fileManager = FileManager.default
             var isDirectory: ObjCBool = false
             
@@ -312,13 +254,11 @@ class BackupSettings {
             } else if !isDirectory.boolValue {
                 errors.append("Local destination path is not a directory")
             } else {
-                // Check if writable
                 if !fileManager.isWritableFile(atPath: localDestinationPath) {
                     errors.append("Local destination path is not writable")
                 }
             }
             
-            // Check that source and destination are different
             if sourcePath == localDestinationPath {
                 errors.append("Source and destination paths cannot be the same")
             }

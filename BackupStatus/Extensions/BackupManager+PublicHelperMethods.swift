@@ -9,11 +9,6 @@
 import Foundation
 
 extension BackupManager {
-    func runForceBackup() async {
-        logManager.log("🚀 Force backup initiated", level: .info)
-        await runBackup(force: true)
-    }
-    
     func getSettings() async -> BackupSettings? {
         return await dataActor.getSettings()
     }

@@ -55,8 +55,6 @@ extension BackupManager {
         case .local:
             logManager.log("Local Path: \(settings.localDestinationPath)", level: .debug)
             logManager.log("Create Dated Folders: \(settings.localCreateDatedFolders)", level: .debug)
-            logManager.log("Latest Path: \(settings.localLatestPath())", level: .debug)
-            logManager.log("Version Path: \(settings.localVersionPath())", level: .debug)
         case .webdav:
             let config = settings.generateRcloneConfig()
             logManager.log(config, level: .debug)
@@ -68,6 +66,7 @@ extension BackupManager {
             logManager.log("Exclude patterns: \(settings.excludeArray.joined(separator: ", "))", level: .debug)
         }
     }
+    
     func debugPasswordHandling() async {
         guard let settings = await dataActor.getSettings() else {
             logManager.log("❌ No settings found", level: .error)
