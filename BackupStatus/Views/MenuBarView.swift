@@ -1,4 +1,4 @@
-// MARK: - MenuBarView with Debug Mode Support
+// MARK: - MenuBarView with Profile-Based Backups
 import SwiftUI
 import SwiftData
 
@@ -9,6 +9,7 @@ struct MenuBarView: View {
     @State private var timer: Timer?
     @State private var showingForceBackupConfirmation = false
     @State private var showingConfigurationAlert = false
+    @State private var configurationErrors: [String] = []
     @Environment(\.openWindow) private var openWindow
     
     // Debug Mode
@@ -108,7 +109,7 @@ struct MenuBarView: View {
             
             Divider()
             
-            // Backup Actions
+            // Profile-Based Backup Actions
             VStack(alignment: .leading, spacing: 4) {
                 Button(action: {
                     runScheduledBackupSafely()
@@ -119,7 +120,7 @@ struct MenuBarView: View {
                     }
                 }
                 .disabled(backupManager.isRunning || !backupManager.isInitialized)
-                .help("Runs backup only if enough time has passed since last backup")
+                .help("Runs all enabled profiles, respecting their backup intervals")
                 
                 Button(action: {
                     runForceBackupSafely()
@@ -130,25 +131,10 @@ struct MenuBarView: View {
                     }
                 }
                 .disabled(backupManager.isRunning || !backupManager.isInitialized)
-                .help("Immediately runs backup, ignoring schedule and time restrictions")
+                .help("Immediately runs all enabled profiles, ignoring schedule")
             }
             
             Divider()
-            
-            // In MenuBarView, update backup buttons:
-            Button("Run All Backups") {
-                Task { @MainActor [weak backupManager] in
-                    guard let backupManager = backupManager else { return }
-                    await backupManager.runAllProfileBackups(force: false)
-                }
-            }
-
-            Button("Force All Backups") {
-                Task { @MainActor [weak backupManager] in
-                    guard let backupManager = backupManager else { return }
-                    await backupManager.runAllProfileBackups(force: true)
-                }
-            }
             
             Button("Test Connection") {
                 Task { @MainActor [weak backupManager] in
@@ -169,13 +155,12 @@ struct MenuBarView: View {
                 safeOpenWindow("log")
             }
             
-            Button("Settings") {
-                safeOpenWindow("settings")
-            }
-            
-            // In MenuBarView.swift, add:
             Button("Manage Profiles") {
                 safeOpenWindow("profiles")
+            }
+            
+            Button("Settings") {
+                safeOpenWindow("settings")
             }
             
             // Debug Tools (shown when debug mode is enabled OR in DEBUG build)
@@ -196,25 +181,29 @@ struct MenuBarView: View {
         .padding()
         .frame(minWidth: 220)
         .alert("Configuration Required", isPresented: $showingConfigurationAlert) {
-            Button("Open Settings") {
-                logManager.log("🔧 User opened settings from config alert", level: .info)
-                safeOpenWindow("settings")
+            Button("Open Profiles") {
+                logManager.log("🔧 User opened profiles from config alert", level: .info)
+                safeOpenWindow("profiles")
             }
             Button("Cancel", role: .cancel) {
                 logManager.log("❌ User cancelled configuration alert", level: .info)
             }
         } message: {
-            Text("Please configure your backup settings first. You need to set the source folder and destination.")
+            if configurationErrors.isEmpty {
+                Text("No enabled backup profiles found. Please create and enable at least one profile.")
+            } else {
+                Text("Profile configuration issues:\n\n" + configurationErrors.joined(separator: "\n"))
+            }
         }
         .alert("Force Backup", isPresented: $showingForceBackupConfirmation) {
             Button("Cancel", role: .cancel) {
-                logManager.log("❌ User cancelled scheduled backup confirmation", level: .info)
+                logManager.log("❌ User cancelled force backup confirmation", level: .info)
             }
             Button("Run Backup", role: .destructive) {
-                logManager.log("✅ User confirmed scheduled backup", level: .info)
+                logManager.log("✅ User confirmed force backup", level: .info)
                 Task { @MainActor [weak backupManager] in
                     guard let backupManager = backupManager else { return }
-                    await backupManager.runBackup()
+                    await backupManager.runAllProfileBackups(force: true)
                 }
             }
         } message: {
@@ -288,41 +277,8 @@ struct MenuBarView: View {
                 }
                 .disabled(!backupManager.isInitialized)
                 
-                // Version Management Debug Tools
                 Divider()
                 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Version Management")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    
-                    Button("📈 Version Stats") {
-                        Task { @MainActor [weak backupManager, weak logManager] in
-                            guard let backupManager = backupManager, let logManager = logManager else { return }
-                            let stats = await backupManager.getVersionStatistics()
-                            logManager.log("🗂️ Version Statistics:", level: .info)
-                            logManager.log("  Total versions: \(stats.totalVersions)", level: .info)
-                            logManager.log("  Total size: \(ByteCountFormatter.string(fromByteCount: stats.totalSize, countStyle: .file))", level: .info)
-                            if let oldest = stats.oldestVersion {
-                                logManager.log("  Oldest: \(oldest)", level: .info)
-                            }
-                            if let newest = stats.newestVersion {
-                                logManager.log("  Newest: \(newest)", level: .info)
-                            }
-                        }
-                    }
-                    .disabled(!backupManager.isInitialized)
-                    
-                    Button("🗑️ Clean Old Versions") {
-                        Task { @MainActor [weak backupManager] in
-                            guard let backupManager = backupManager else { return }
-                            await backupManager.cleanupOldVersionsManually()
-                        }
-                    }
-                    .disabled(!backupManager.isInitialized)
-                }
-                
-                // Log Management Debug Tools
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Log Management")
                         .font(.caption2)
@@ -369,31 +325,54 @@ struct MenuBarView: View {
         }
         
         Task { @MainActor in
-            let settings = await backupManager.getOrCreateSettings()
-            let validation = settings.validateConfiguration()
+            // Get all enabled profiles and validate them
+            let profiles = await backupManager.getEnabledProfiles()
             
-            logManager.log("📋 Configuration validation result: \(validation.isValid)", level: .info)
-            if !validation.isValid {
-                logManager.log("❌ Configuration errors: \(validation.errors.joined(separator: ", "))", level: .error)
+            guard !profiles.isEmpty else {
+                logManager.log("❌ No enabled profiles found", level: .error)
+                configurationErrors = []
                 showingConfigurationAlert = true
-            } else {
-                logManager.log("✅ Configuration valid", level: .info)
-                
-                if let lastBackup = backupManager.lastBackupTime {
-                    let hoursSince = Date().timeIntervalSince(lastBackup) / 3600
-                    logManager.log("⏰ Last backup was \(String(format: "%.2f", hoursSince)) hours ago", level: .info)
-                    
-                    if hoursSince < 1 {
-                        logManager.log("⚠️ Recent backup detected, showing confirmation for scheduled backup", level: .info)
-                        showingForceBackupConfirmation = true
-                    } else {
-                        logManager.log("🚀 No recent backup, running scheduled backup immediately", level: .info)
-                        await backupManager.runBackup()
-                    }
-                } else {
-                    logManager.log("📝 No previous backup found, running scheduled backup", level: .info)
-                    await backupManager.runBackup()
+                return
+            }
+            
+            logManager.log("📋 Found \(profiles.count) enabled profile(s)", level: .info)
+            
+            // Validate all enabled profiles
+            var hasInvalidProfiles = false
+            var allErrors: [String] = []
+            
+            for profile in profiles {
+                let validation = profile.validateConfiguration()
+                if !validation.isValid {
+                    hasInvalidProfiles = true
+                    allErrors.append("\(profile.name): " + validation.errors.joined(separator: ", "))
+                    logManager.log("❌ Profile '\(profile.name)' has configuration errors: \(validation.errors.joined(separator: ", "))", level: .error)
                 }
+            }
+            
+            if hasInvalidProfiles {
+                configurationErrors = allErrors
+                showingConfigurationAlert = true
+                return
+            }
+            
+            logManager.log("✅ All profiles valid", level: .info)
+            
+            // Check if any backups are recent
+            let hasRecentBackup = profiles.contains { profile in
+                if let lastBackup = profile.lastSuccessfulBackup {
+                    let hoursSince = Date().timeIntervalSince(lastBackup) / 3600
+                    return hoursSince < 1
+                }
+                return false
+            }
+            
+            if hasRecentBackup {
+                logManager.log("⚠️ Recent backup detected, showing confirmation", level: .info)
+                showingForceBackupConfirmation = true
+            } else {
+                logManager.log("🚀 Running scheduled backup", level: .info)
+                await backupManager.runAllProfileBackups(force: false)
             }
         }
     }
@@ -407,26 +386,39 @@ struct MenuBarView: View {
         }
         
         Task { @MainActor in
-            let settings = await backupManager.getOrCreateSettings()
-            let validation = settings.validateConfiguration()
+            // Get all enabled profiles and validate them
+            let profiles = await backupManager.getEnabledProfiles()
             
-            logManager.log("📋 Force backup - Configuration validation result: \(validation.isValid)", level: .info)
-            
-            if !validation.isValid {
-                logManager.log("❌ Configuration invalid. Errors: \(validation.errors.joined(separator: ", "))", level: .error)
+            guard !profiles.isEmpty else {
+                logManager.log("❌ No enabled profiles found", level: .error)
+                configurationErrors = []
                 showingConfigurationAlert = true
                 return
             }
             
-            if let lastBackup = backupManager.lastBackupTime {
-                let hoursSince = Date().timeIntervalSince(lastBackup) / 3600
-                logManager.log("⏰ Last backup was \(String(format: "%.2f", hoursSince)) hours ago (ignoring for force backup)", level: .info)
-            } else {
-                logManager.log("📝 No previous backup found", level: .info)
+            logManager.log("📋 Found \(profiles.count) enabled profile(s) for force backup", level: .info)
+            
+            // Validate all enabled profiles
+            var hasInvalidProfiles = false
+            var allErrors: [String] = []
+            
+            for profile in profiles {
+                let validation = profile.validateConfiguration()
+                if !validation.isValid {
+                    hasInvalidProfiles = true
+                    allErrors.append("\(profile.name): " + validation.errors.joined(separator: ", "))
+                    logManager.log("❌ Profile '\(profile.name)' has configuration errors: \(validation.errors.joined(separator: ", "))", level: .error)
+                }
+            }
+            
+            if hasInvalidProfiles {
+                configurationErrors = allErrors
+                showingConfigurationAlert = true
+                return
             }
             
             logManager.log("🚀 Force backup - running immediately (no restrictions)", level: .info)
-            await backupManager.runForceBackup()
+            await backupManager.runAllProfileBackups(force: true)
         }
     }
     
@@ -476,7 +468,7 @@ struct MenuBarView: View {
             Task { @MainActor in
                 guard !backupManager.isRunning && backupManager.isInitialized else { return }
                 logManager.log("⏰ Periodic backup timer triggered", level: .debug)
-                await backupManager.runBackup()
+                await backupManager.runAllProfileBackups(force: false)
             }
         }
         
