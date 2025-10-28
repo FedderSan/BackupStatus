@@ -92,8 +92,12 @@ actor BackupDataActor {
         return (try? modelContext.fetch(descriptor)) ?? []
     }
     
-    func cleanOldSessions() {
-        let cutoffDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    // MARK: - Automatic Cleanup (runs in background)
+    
+    /// Automatically cleans old sessions based on retention period
+    /// This should be called periodically (e.g., after each backup or on startup)
+    func cleanOldSessions(retentionDays: Int = 90) {
+        let cutoffDate = Calendar.current.date(byAdding: .day, value: -retentionDays, to: Date()) ?? Date()
         
         var descriptor = FetchDescriptor<BackupSession>(
             predicate: #Predicate<BackupSession> { session in
@@ -102,10 +106,26 @@ actor BackupDataActor {
         )
         
         if let oldSessions = try? modelContext.fetch(descriptor) {
-            for session in oldSessions {
-                modelContext.delete(session)
+            let count = oldSessions.count
+            
+            if count > 0 {
+                for session in oldSessions {
+                    modelContext.delete(session)
+                }
+                
+                do {
+                    try modelContext.save()
+                    print("🧹 Auto-cleaned \(count) session(s) older than \(retentionDays) days")
+                } catch {
+                    print("❌ Failed to clean old sessions: \(error)")
+                }
             }
-            try? modelContext.save()
         }
+    }
+    
+    /// Gets the total count of all sessions
+    func getTotalSessionCount() -> Int {
+        let descriptor = FetchDescriptor<BackupSession>()
+        return (try? modelContext.fetch(descriptor).count) ?? 0
     }
 }
