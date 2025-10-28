@@ -45,19 +45,27 @@ extension BackupDataActor {
     }
     
     func deleteProfile(_ profile: BackupProfile) {
-        // Delete the profile directly - SwiftData will handle it
         modelContext.delete(profile)
-        try? modelContext.save()
+        
+        do {
+            try modelContext.save()
+        } catch {
+            print("Failed to delete profile: \(error)")
+        }
     }
     
-    func updateProfileStats(_ profile: BackupProfile, filesCount: Int, totalSize: Int64) {
-        // Update the profile directly - it's already in the context
+    func updateProfileStats(_ profileID: PersistentIdentifier, filesCount: Int, totalSize: Int64) throws {
+        guard let profile = self[profileID, as: BackupProfile.self] else {
+            print("❌ Profile not found for identifier: \(profileID)")
+            throw BackupError.sessionNotFound
+        }
+        
         profile.lastSuccessfulBackup = Date()
         profile.totalBackupsRun += 1
         profile.lastBackupFilesCount = filesCount
         profile.lastBackupSize = totalSize
         
-        try? modelContext.save()
+        try modelContext.save()
     }
     
     func getProfile(byName name: String) -> BackupProfile? {

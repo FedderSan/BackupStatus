@@ -32,8 +32,12 @@ extension BackupManager {
         logManager.log("🗑️ Deleted profile: \(profile.name)", level: .info)
     }
     
-    func updateProfileStats(_ profile: BackupProfile, filesCount: Int, totalSize: Int64) async {
-        await dataActor.updateProfileStats(profile, filesCount: filesCount, totalSize: totalSize)
+    func updateProfileStats(_ profileID: PersistentIdentifier, filesCount: Int, totalSize: Int64) async {
+        do {
+            try await dataActor.updateProfileStats(profileID, filesCount: filesCount, totalSize: totalSize)
+        } catch {
+            logManager.log("❌ Failed to update profile stats: \(error)", level: .error)
+        }
     }
     
     // MARK: - Run All Profiles
@@ -65,6 +69,9 @@ extension BackupManager {
             logManager.log("⏭️ Skipping disabled profile: \(profile.name)", level: .info)
             return
         }
+        
+        // Get profile ID for updates
+        let profileID = profile.persistentModelID
         
         logManager.log("🔄 Starting backup for profile: \(profile.name)", level: .info)
         logManager.log("📁 Source: \(profile.fullSourcePath)", level: .debug)
@@ -104,31 +111,34 @@ extension BackupManager {
         // Run backup based on profile type and remote type
         switch (profile.profileType, profile.remoteType) {
         case (.versioned, .local):
-            await runVersionedLocalBackup(profile)
+            await runVersionedLocalBackup(profile, profileID: profileID)
         case (.versioned, .webdav):
-            await runVersionedWebDAVBackup(profile)
+            await runVersionedWebDAVBackup(profile, profileID: profileID)
         case (.oneWaySync, .local):
-            await runOneWaySyncLocalBackup(profile)
+            await runOneWaySyncLocalBackup(profile, profileID: profileID)
         case (.oneWaySync, .webdav):
-            await runOneWaySyncWebDAVBackup(profile)
+            await runOneWaySyncWebDAVBackup(profile, profileID: profileID)
         }
     }
     
     // MARK: - Local Versioned Backup
     
-    private func runVersionedLocalBackup(_ profile: BackupProfile) async {
+    private func runVersionedLocalBackup(_ profile: BackupProfile, profileID: PersistentIdentifier) async {
         logManager.log("📦 Running local versioned backup for: \(profile.name)", level: .info)
         
-        // Create backup session
-        let session = await dataActor.createBackupSession()
-        let sessionID = session.persistentModelID
+        // Create backup session and get its ID
+        let sessionID = await dataActor.createBackupSession()
         
         guard hasRealRsync else {
             logManager.log("❌ Cannot run versioned backup: Real GNU rsync required", level: .error)
             logManager.log("💡 Install with: brew install rsync", level: .error)
             
             // Mark session as failed
-            try? await dataActor.updateSessionStatus(sessionID, status: .failed, error: "Real GNU rsync not found")
+            do {
+                try await dataActor.updateSessionStatus(sessionID, status: .failed, error: "Real GNU rsync not found")
+            } catch {
+                logManager.log("❌ Failed to update session status: \(error)", level: .error)
+            }
             return
         }
         
@@ -158,7 +168,11 @@ extension BackupManager {
             
             guard latestResult.success else {
                 logManager.log("❌ Latest sync failed: \(latestResult.error ?? "Unknown")", level: .error)
-                try? await dataActor.updateSessionStatus(sessionID, status: .failed, error: latestResult.error)
+                do {
+                    try await dataActor.updateSessionStatus(sessionID, status: .failed, error: latestResult.error)
+                } catch {
+                    logManager.log("❌ Failed to update session status: \(error)", level: .error)
+                }
                 return
             }
             
@@ -197,33 +211,40 @@ extension BackupManager {
             }
             
             let stats = await getLocalBackupStats(latestPath)
-            await updateProfileStats(profile, filesCount: stats.fileCount, totalSize: stats.totalSize)
+            await updateProfileStats(profileID, filesCount: stats.fileCount, totalSize: stats.totalSize)
             
             // Mark session as successful
-            try? await dataActor.updateSession(
-                sessionID,
-                success: true,
-                error: nil,
-                filesCount: stats.fileCount,
-                totalSize: stats.totalSize
-            )
+            do {
+                try await dataActor.updateSession(
+                    sessionID,
+                    success: true,
+                    error: nil,
+                    filesCount: stats.fileCount,
+                    totalSize: stats.totalSize
+                )
+            } catch {
+                logManager.log("❌ Failed to update session: \(error)", level: .error)
+            }
             
             logManager.log("✅ Versioned backup completed for \(profile.name): \(stats.fileCount) files, \(ByteCountFormatter.string(fromByteCount: stats.totalSize, countStyle: .file))", level: .info)
             
         } catch {
             logManager.log("❌ Versioned backup failed for \(profile.name): \(error)", level: .error)
-            try? await dataActor.updateSessionStatus(sessionID, status: .failed, error: error.localizedDescription)
+            do {
+                try await dataActor.updateSessionStatus(sessionID, status: .failed, error: error.localizedDescription)
+            } catch {
+                logManager.log("❌ Failed to update session status: \(error)", level: .error)
+            }
         }
     }
     
     // MARK: - WebDAV Versioned Backup
     
-    private func runVersionedWebDAVBackup(_ profile: BackupProfile) async {
+    private func runVersionedWebDAVBackup(_ profile: BackupProfile, profileID: PersistentIdentifier) async {
         logManager.log("☁️ Running WebDAV versioned backup for: \(profile.name)", level: .info)
         
-        // Create backup session
-        let session = await dataActor.createBackupSession()
-        let sessionID = session.persistentModelID
+        // Create backup session and get its ID
+        let sessionID = await dataActor.createBackupSession()
         
         let dateVersion = DateFormatter.versionFormat.string(from: Date())
         let remoteBase = profile.fullDestinationPath
@@ -250,7 +271,11 @@ extension BackupManager {
         
         guard latestResult.success else {
             logManager.log("❌ Latest sync failed: \(latestResult.error ?? "Unknown")", level: .error)
-            try? await dataActor.updateSessionStatus(sessionID, status: .failed, error: latestResult.error)
+            do {
+                try await dataActor.updateSessionStatus(sessionID, status: .failed, error: latestResult.error)
+            } catch {
+                logManager.log("❌ Failed to update session status: \(error)", level: .error)
+            }
             return
         }
         
@@ -291,35 +316,42 @@ extension BackupManager {
         
         // Get stats (estimated for WebDAV - TODO: implement proper rclone stats)
         let stats = (fileCount: 100, totalSize: Int64(1024000))
-        await updateProfileStats(profile, filesCount: stats.fileCount, totalSize: stats.totalSize)
+        await updateProfileStats(profileID, filesCount: stats.fileCount, totalSize: stats.totalSize)
         
         // Mark session as successful
-        try? await dataActor.updateSession(
-            sessionID,
-            success: true,
-            error: nil,
-            filesCount: stats.fileCount,
-            totalSize: stats.totalSize
-        )
+        do {
+            try await dataActor.updateSession(
+                sessionID,
+                success: true,
+                error: nil,
+                filesCount: stats.fileCount,
+                totalSize: stats.totalSize
+            )
+        } catch {
+            logManager.log("❌ Failed to update session: \(error)", level: .error)
+        }
         
         logManager.log("✅ WebDAV backup completed for \(profile.name)", level: .info)
     }
     
     // MARK: - Local One-Way Sync
     
-    private func runOneWaySyncLocalBackup(_ profile: BackupProfile) async {
+    private func runOneWaySyncLocalBackup(_ profile: BackupProfile, profileID: PersistentIdentifier) async {
         logManager.log("🔄 Running local one-way sync for: \(profile.name)", level: .info)
         
-        // Create backup session
-        let session = await dataActor.createBackupSession()
-        let sessionID = session.persistentModelID
+        // Create backup session and get its ID
+        let sessionID = await dataActor.createBackupSession()
         
         guard hasRealRsync else {
             logManager.log("❌ Cannot run one-way sync: Real GNU rsync required", level: .error)
             logManager.log("💡 Install with: brew install rsync", level: .error)
             
             // Mark session as failed
-            try? await dataActor.updateSessionStatus(sessionID, status: .failed, error: "Real GNU rsync not found")
+            do {
+                try await dataActor.updateSessionStatus(sessionID, status: .failed, error: "Real GNU rsync not found")
+            } catch {
+                logManager.log("❌ Failed to update session status: \(error)", level: .error)
+            }
             return
         }
         
@@ -360,7 +392,11 @@ extension BackupManager {
                 
                 guard syncResult.success else {
                     logManager.log("❌ One-way sync failed: \(syncResult.error ?? "Unknown")", level: .error)
-                    try? await dataActor.updateSessionStatus(sessionID, status: .failed, error: syncResult.error)
+                    do {
+                        try await dataActor.updateSessionStatus(sessionID, status: .failed, error: syncResult.error)
+                    } catch {
+                        logManager.log("❌ Failed to update session status: \(error)", level: .error)
+                    }
                     return
                 }
                 
@@ -390,39 +426,50 @@ extension BackupManager {
                 
                 guard syncResult.success else {
                     logManager.log("❌ One-way sync failed: \(syncResult.error ?? "Unknown")", level: .error)
-                    try? await dataActor.updateSessionStatus(sessionID, status: .failed, error: syncResult.error)
+                    do {
+                        try await dataActor.updateSessionStatus(sessionID, status: .failed, error: syncResult.error)
+                    } catch {
+                        logManager.log("❌ Failed to update session status: \(error)", level: .error)
+                    }
                     return
                 }
             }
             
             let stats = await getLocalBackupStats(destinationPath)
-            await updateProfileStats(profile, filesCount: stats.fileCount, totalSize: stats.totalSize)
+            await updateProfileStats(profileID, filesCount: stats.fileCount, totalSize: stats.totalSize)
             
             // Mark session as successful
-            try? await dataActor.updateSession(
-                sessionID,
-                success: true,
-                error: nil,
-                filesCount: stats.fileCount,
-                totalSize: stats.totalSize
-            )
+            do {
+                try await dataActor.updateSession(
+                    sessionID,
+                    success: true,
+                    error: nil,
+                    filesCount: stats.fileCount,
+                    totalSize: stats.totalSize
+                )
+            } catch {
+                logManager.log("❌ Failed to update session: \(error)", level: .error)
+            }
             
             logManager.log("✅ One-way sync completed for \(profile.name): \(stats.fileCount) files, \(ByteCountFormatter.string(fromByteCount: stats.totalSize, countStyle: .file))", level: .info)
             
         } catch {
             logManager.log("❌ One-way sync failed for \(profile.name): \(error)", level: .error)
-            try? await dataActor.updateSessionStatus(sessionID, status: .failed, error: error.localizedDescription)
+            do {
+                try await dataActor.updateSessionStatus(sessionID, status: .failed, error: error.localizedDescription)
+            } catch {
+                logManager.log("❌ Failed to update session status: \(error)", level: .error)
+            }
         }
     }
     
     // MARK: - WebDAV One-Way Sync
     
-    private func runOneWaySyncWebDAVBackup(_ profile: BackupProfile) async {
+    private func runOneWaySyncWebDAVBackup(_ profile: BackupProfile, profileID: PersistentIdentifier) async {
         logManager.log("☁️ Running WebDAV one-way sync for: \(profile.name)", level: .info)
         
-        // Create backup session
-        let session = await dataActor.createBackupSession()
-        let sessionID = session.persistentModelID
+        // Create backup session and get its ID
+        let sessionID = await dataActor.createBackupSession()
         
         let remoteBase = profile.fullDestinationPath
         
@@ -449,22 +496,30 @@ extension BackupManager {
         
         guard syncResult.success else {
             logManager.log("❌ WebDAV sync failed: \(syncResult.error ?? "Unknown")", level: .error)
-            try? await dataActor.updateSessionStatus(sessionID, status: .failed, error: syncResult.error)
+            do {
+                try await dataActor.updateSessionStatus(sessionID, status: .failed, error: syncResult.error)
+            } catch {
+                logManager.log("❌ Failed to update session status: \(error)", level: .error)
+            }
             return
         }
         
         // Get stats (estimated for WebDAV - TODO: implement proper rclone stats)
         let stats = (fileCount: 100, totalSize: Int64(1024000))
-        await updateProfileStats(profile, filesCount: stats.fileCount, totalSize: stats.totalSize)
+        await updateProfileStats(profileID, filesCount: stats.fileCount, totalSize: stats.totalSize)
         
         // Mark session as successful
-        try? await dataActor.updateSession(
-            sessionID,
-            success: true,
-            error: nil,
-            filesCount: stats.fileCount,
-            totalSize: stats.totalSize
-        )
+        do {
+            try await dataActor.updateSession(
+                sessionID,
+                success: true,
+                error: nil,
+                filesCount: stats.fileCount,
+                totalSize: stats.totalSize
+            )
+        } catch {
+            logManager.log("❌ Failed to update session: \(error)", level: .error)
+        }
         
         logManager.log("✅ WebDAV sync completed for \(profile.name)", level: .info)
     }

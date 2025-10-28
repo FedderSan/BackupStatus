@@ -13,10 +13,18 @@ import Network
 
 @ModelActor
 actor BackupDataActor {
-    func createBackupSession() -> BackupSession {
+    func createBackupSession() -> PersistentIdentifier {
         let session = BackupSession()
         modelContext.insert(session)
-        return session
+        
+        // Save immediately to ensure the session is persisted
+        do {
+            try modelContext.save()
+        } catch {
+            print("Failed to save backup session: \(error)")
+        }
+        
+        return session.persistentModelID
     }
     
     func updateSession(_ sessionID: PersistentIdentifier,
@@ -24,7 +32,9 @@ actor BackupDataActor {
                       error: String?,
                       filesCount: Int,
                       totalSize: Int64) throws {
-        guard let session = modelContext.model(for: sessionID) as? BackupSession else {
+        // Fetch the session fresh from the context
+        guard let session = self[sessionID, as: BackupSession.self] else {
+            print("❌ Session not found for identifier: \(sessionID)")
             throw BackupError.sessionNotFound
         }
         
@@ -38,7 +48,9 @@ actor BackupDataActor {
     }
     
     func updateSessionStatus(_ sessionID: PersistentIdentifier, status: BackupStatus, error: String? = nil) throws {
-        guard let session = modelContext.model(for: sessionID) as? BackupSession else {
+        // Fetch the session fresh from the context
+        guard let session = self[sessionID, as: BackupSession.self] else {
+            print("❌ Session not found for identifier: \(sessionID)")
             throw BackupError.sessionNotFound
         }
         
@@ -97,9 +109,3 @@ actor BackupDataActor {
         }
     }
 }
-
-
-
-
-
-
