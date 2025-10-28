@@ -13,8 +13,7 @@ struct BackupHistoryView: View {
     @Query(sort: \BackupSession.startTime, order: .reverse)
     private var sessions: [BackupSession]
     
-    @State private var showingCleanConfirmation = false
-    @State private var cleanedCount = 0
+    @State private var showingClearConfirmation = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -106,32 +105,21 @@ struct BackupHistoryView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: {
-                    showingCleanConfirmation = true
+                    showingClearConfirmation = true
                 }) {
-                    Label("Clean Old Sessions", systemImage: "trash")
+                    Label("Clear All History", systemImage: "trash")
                 }
+                .foregroundColor(.red)
                 .disabled(sessions.isEmpty)
             }
         }
-        .alert("Clean Old Sessions?", isPresented: $showingCleanConfirmation) {
+        .alert("Clear All History?", isPresented: $showingClearConfirmation) {
             Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
-                cleanOldSessions()
+            Button("Clear All", role: .destructive) {
+                clearAllSessions()
             }
         } message: {
-            let oldCount = countOldSessions()
-            if oldCount > 0 {
-                Text("This will delete \(oldCount) session(s) older than 30 days.")
-            } else {
-                Text("No sessions older than 30 days found.")
-            }
-        }
-        .alert("Sessions Cleaned", isPresented: .constant(cleanedCount > 0)) {
-            Button("OK") {
-                cleanedCount = 0
-            }
-        } message: {
-            Text("Successfully deleted \(cleanedCount) old session(s).")
+            Text("This will permanently delete all \(sessions.count) backup session(s) from history. Your actual backup files will not be affected.")
         }
     }
     
@@ -161,27 +149,20 @@ struct BackupHistoryView: View {
         }
     }
     
-    private func countOldSessions() -> Int {
-        let cutoffDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-        return sessions.filter { $0.startTime < cutoffDate }.count
-    }
-    
-    private func cleanOldSessions() {
-        let cutoffDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    private func clearAllSessions() {
+        let count = sessions.count
         
-        var deletedCount = 0
-        for session in sessions where session.startTime < cutoffDate {
+        // Delete all sessions
+        for session in sessions {
             modelContext.delete(session)
-            deletedCount += 1
         }
         
-        // CRITICAL FIX: Save the context after deletion
+        // Save the context
         do {
             try modelContext.save()
-            cleanedCount = deletedCount
-            print("✅ Successfully cleaned \(deletedCount) old sessions")
+            print("✅ Successfully cleared \(count) session(s) from history")
         } catch {
-            print("❌ Failed to save after cleaning sessions: \(error)")
+            print("❌ Failed to save after clearing sessions: \(error)")
         }
     }
 }

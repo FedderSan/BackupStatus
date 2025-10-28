@@ -27,6 +27,9 @@ extension BackupManager {
             // Step 4: Load settings and validate
             await loadAndValidateSettings()
             
+            // Step 5: Clean old sessions automatically
+            await cleanOldSessionsAutomatically()
+            
             isInitialized = true
             logManager.log("✅ BackupManager initialization completed successfully", level: .info)
             
@@ -85,7 +88,7 @@ extension BackupManager {
         // Check rsync (NEW: Check for real GNU rsync)
         if let realRsyncPath = self.realRsyncPath {
             logManager.log("✅ Real GNU rsync found at: \(realRsyncPath)", level: .debug)
-            	
+                
             // Get and log version
             if let version = self.getRsyncVersion() {
                 logManager.log("📦 rsync version: \(version)", level: .debug)
@@ -128,6 +131,25 @@ extension BackupManager {
             for error in validation.errors {
                 logManager.log("  - \(error)", level: .warning)
             }
+        }
+    }
+    
+    func cleanOldSessionsAutomatically() async {
+        logManager.log("🧹 Running automatic session cleanup...", level: .debug)
+        
+        let totalBefore = await dataActor.getTotalSessionCount()
+        logManager.log("📊 Total sessions before cleanup: \(totalBefore)", level: .debug)
+        
+        // Clean sessions older than 90 days (default retention period)
+        await dataActor.cleanOldSessions(retentionDays: 90)
+        
+        let totalAfter = await dataActor.getTotalSessionCount()
+        let cleaned = totalBefore - totalAfter
+        
+        if cleaned > 0 {
+            logManager.log("🧹 Automatically cleaned \(cleaned) old session(s)", level: .info)
+        } else {
+            logManager.log("✅ No old sessions to clean", level: .debug)
         }
     }
 }
