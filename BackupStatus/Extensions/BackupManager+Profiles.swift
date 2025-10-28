@@ -248,32 +248,14 @@ extension BackupManager {
                     return
                 }
                 
-                // Log what ended up in trash
+                // FIXED: Check what ended up in trash and clean up empty folders
                 if let trashContents = try? fileManager.contentsOfDirectory(atPath: trashSessionPath) {
                     if trashContents.isEmpty {
-                        logManager.log("ℹ️ Trash folder is empty - checking if this is expected...", level: .info)
-                        
-                        // Check source and destination to understand why
-                        let sourceContents = (try? fileManager.contentsOfDirectory(atPath: profile.fullSourcePath)) ?? []
-                        let destContents = (try? fileManager.contentsOfDirectory(atPath: destinationPath)) ?? []
-                        
-                        logManager.log("📊 Source has \(sourceContents.count) items", level: .debug)
-                        logManager.log("📊 Destination has \(destContents.count) items", level: .debug)
-                        
-                        // Find items in destination but not in source
-                        let destSet = Set(destContents)
-                        let sourceSet = Set(sourceContents)
-                        let shouldBeDeleted = destSet.subtracting(sourceSet).filter { !$0.hasPrefix(".") }
-                        
-                        if !shouldBeDeleted.isEmpty {
-                            logManager.log("⚠️ Found \(shouldBeDeleted.count) items that should have been deleted:", level: .warning)
-                            for item in Array(shouldBeDeleted.prefix(10)) {
-                                logManager.log("  ❓ \(item)", level: .warning)
-                            }
-                        } else {
-                            logManager.log("✅ No unexpected files in destination - sync is correct", level: .info)
-                        }
+                        // No files were deleted - remove the empty trash folder
+                        try? fileManager.removeItem(atPath: trashSessionPath)
+                        logManager.log("✅ No files deleted - removed empty trash folder", level: .debug)
                     } else {
+                        // Files were deleted - log what was moved to trash
                         logManager.log("🗑️ Moved \(trashContents.count) items to trash:", level: .info)
                         for item in trashContents.prefix(20) {
                             let itemPath = "\(trashSessionPath)/\(item)"
