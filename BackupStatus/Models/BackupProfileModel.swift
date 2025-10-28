@@ -1,20 +1,41 @@
+//
+//  BackupProfileModel.swift
+//  BackupStatus
+//
+//  Enhanced with WebDAV support
+//
 
 import SwiftData
 import Foundation
+
 // MARK: - Backup Profile Model
 @Model
 class BackupProfile {
     var id: UUID
     var name: String
     var isEnabled: Bool
-    var profileTypeRaw: String  // Store as String for SwiftData
+    var profileTypeRaw: String  // versioned or oneWaySync
+    
+    // NEW: Remote Type
+    var remoteTypeRaw: String  // local or webdav
     
     // Source Configuration
     var sourcePath: String
     var excludePatterns: String
     
-    // Destination Configuration
+    // Local Destination Configuration
     var destinationPath: String
+    
+    // NEW: WebDAV Configuration
+    var webdavServerHost: String
+    var webdavServerPort: Int
+    var webdavUseHTTPS: Bool
+    var webdavVerifySSL: Bool
+    var webdavURL: String  // Base URL path like /remote.php/dav/files/username
+    var webdavPath: String  // Backup path within WebDAV
+    var webdavUsername: String
+    var webdavPasswordObscured: String
+    var webdavRemoteName: String  // For rclone config
     
     // Versioned Backup Settings
     var createVersions: Bool
@@ -45,6 +66,16 @@ class BackupProfile {
         }
     }
     
+    // NEW: Computed property for remoteType
+    var remoteType: ProfileRemoteType {
+        get {
+            return ProfileRemoteType(rawValue: remoteTypeRaw) ?? .local
+        }
+        set {
+            remoteTypeRaw = newValue.rawValue
+        }
+    }
+    
     var versionRetention: BackupVersionRetention {
         get {
             return BackupVersionRetention(rawValue: versionRetentionCount) ?? .versions14
@@ -54,11 +85,12 @@ class BackupProfile {
         }
     }
     
-    init(name: String, profileType: BackupProfileType) {
+    init(name: String, profileType: BackupProfileType, remoteType: ProfileRemoteType = .local) {
         self.id = UUID()
         self.name = name
         self.isEnabled = true
         self.profileTypeRaw = profileType.rawValue
+        self.remoteTypeRaw = remoteType.rawValue
         
         // Source defaults
         self.sourcePath = ""
@@ -66,6 +98,17 @@ class BackupProfile {
         
         // Destination defaults
         self.destinationPath = ""
+        
+        // WebDAV defaults
+        self.webdavServerHost = ""
+        self.webdavServerPort = 443
+        self.webdavUseHTTPS = true
+        self.webdavVerifySSL = true
+        self.webdavURL = "/remote.php/dav/files/"
+        self.webdavPath = "Backups"
+        self.webdavUsername = ""
+        self.webdavPasswordObscured = ""
+        self.webdavRemoteName = "backup-\(UUID().uuidString.prefix(8))"
         
         // Versioned backup defaults
         self.createVersions = (profileType == .versioned)
@@ -93,9 +136,16 @@ class BackupProfile {
     }
     
     var fullDestinationPath: String {
-        return destinationPath.hasSuffix("/") ?
-            String(destinationPath.dropLast()) :
-            destinationPath
+        switch remoteType {
+        case .local:
+            return destinationPath.hasSuffix("/") ?
+                String(destinationPath.dropLast()) :
+                destinationPath
+        case .webdav:
+            // For WebDAV, return the rclone remote path
+            let cleanPath = webdavPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return "\(webdavRemoteName):\(cleanPath)"
+        }
     }
     
     var excludeArray: [String] {
@@ -126,6 +176,47 @@ class BackupProfile {
         return "\(fullDestinationPath)/versions"
     }
     
+    // MARK: - WebDAV Helpers
+    
+    var fullWebDAVURL: String {
+        let scheme = webdavUseHTTPS ? "https" : "http"
+        let port = webdavServerPort != (webdavUseHTTPS ? 443 : 80) ? ":\(webdavServerPort)" : ""
+        let cleanURL = webdavURL.hasPrefix("/") ? webdavURL : "/\(webdavURL)"
+        
+        return "\(scheme)://\(webdavServerHost)\(port)\(cleanURL)"
+    }
+    
+    func setPassword(_ plainPassword: String) async {
+        if let obscured = await RclonePasswordHelper.shared.obscurePassword(plainPassword) {
+            self.webdavPasswordObscured = obscured
+        } else {
+            print("Failed to obscure password")
+            self.webdavPasswordObscured = ""
+        }
+    }
+    
+    func getPlainPassword() async -> String? {
+        guard !webdavPasswordObscured.isEmpty else { return nil }
+        return await RclonePasswordHelper.shared.revealPassword(webdavPasswordObscured)
+    }
+    
+    func generateRcloneConfig() -> String {
+        var config = """
+        [\(webdavRemoteName)]
+        type = webdav
+        url = \(fullWebDAVURL)
+        vendor = nextcloud
+        user = \(webdavUsername)
+        pass = \(webdavPasswordObscured)
+        """
+        
+        if !webdavVerifySSL || !webdavUseHTTPS {
+            config += "\ninsecure_skip_verify = true"
+        }
+        
+        return config
+    }
+    
     // MARK: - Validation
     
     func validateConfiguration() -> (isValid: Bool, errors: [String]) {
@@ -135,6 +226,7 @@ class BackupProfile {
             errors.append("Profile name is required")
         }
         
+        // Source validation
         if sourcePath.isEmpty {
             errors.append("Source path is required")
         } else {
@@ -148,21 +240,39 @@ class BackupProfile {
             }
         }
         
-        if destinationPath.isEmpty {
-            errors.append("Destination path is required")
-        } else {
-            var isDirectory: ObjCBool = false
-            if !FileManager.default.fileExists(atPath: destinationPath, isDirectory: &isDirectory) {
-                errors.append("Destination path does not exist")
-            } else if !isDirectory.boolValue {
-                errors.append("Destination path is not a directory")
-            } else if !FileManager.default.isWritableFile(atPath: destinationPath) {
-                errors.append("Destination path is not writable")
+        // Destination validation based on remote type
+        switch remoteType {
+        case .local:
+            if destinationPath.isEmpty {
+                errors.append("Destination path is required")
+            } else {
+                var isDirectory: ObjCBool = false
+                if !FileManager.default.fileExists(atPath: destinationPath, isDirectory: &isDirectory) {
+                    errors.append("Destination path does not exist")
+                } else if !isDirectory.boolValue {
+                    errors.append("Destination path is not a directory")
+                } else if !FileManager.default.isWritableFile(atPath: destinationPath) {
+                    errors.append("Destination path is not writable")
+                }
+                
+                if sourcePath == destinationPath {
+                    errors.append("Source and destination cannot be the same")
+                }
             }
-        }
-        
-        if sourcePath == destinationPath {
-            errors.append("Source and destination cannot be the same")
+            
+        case .webdav:
+            if webdavServerHost.isEmpty {
+                errors.append("WebDAV server host is required")
+            }
+            if webdavUsername.isEmpty {
+                errors.append("WebDAV username is required")
+            }
+            if webdavPasswordObscured.isEmpty {
+                errors.append("WebDAV password is required")
+            }
+            if webdavPath.isEmpty {
+                errors.append("WebDAV backup path is required")
+            }
         }
         
         if backupIntervalHours < 1 {
@@ -176,6 +286,7 @@ class BackupProfile {
     
     func getExistingVersions() -> [String] {
         guard profileType == .versioned else { return [] }
+        guard remoteType == .local else { return [] } // WebDAV version listing needs rclone
         
         let versionsDir = versionsDirectoryPath()
         
@@ -213,6 +324,7 @@ class BackupProfile {
     
     func getTrashItems() -> [(name: String, date: Date, size: Int64)] {
         guard profileType == .oneWaySync && useTrashFolder else { return [] }
+        guard remoteType == .local else { return [] } // WebDAV trash listing needs rclone
         
         let trashDir = trashPath()
         
