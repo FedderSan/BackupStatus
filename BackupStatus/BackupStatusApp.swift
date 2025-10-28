@@ -13,15 +13,15 @@ extension URL {
 @main
 struct BackupStatusApp: App {
     let modelContainer: ModelContainer
-    let logManager: LogManager  // Changed from @StateObject to regular property
+    let logManager: LogManager
     
     init() {
         // Define schema - Include all models for persistence
         let schema = Schema([
             BackupSession.self,
             BackupSettings.self,
-            PersistentLogEntry.self,  // Add this for persistent logs
-            BackupProfile.self  // ADD THIS
+            PersistentLogEntry.self,
+            BackupProfile.self
         ])
         
         // Create configuration with explicit store location in Application Support
@@ -42,27 +42,6 @@ struct BackupStatusApp: App {
         print("📁 Database location: \(storeURL.path)")
         print("📁 App Support directory: \(appSupportURL.path)")
         
-        // COMMENTED OUT: Database deletion code (for development only)
-        // Uncomment ONLY during development if you need to reset the database
-        // WARNING: This will delete all your backup history and settings!
-        /*
-        print("🗑️ DEVELOPMENT MODE: Deleting existing database files")
-        let baseURL = storeURL.deletingPathExtension()
-        let extensions = ["store", "store-shm", "store-wal"]
-
-        for ext in extensions {
-            let fileURL = baseURL.appendingPathExtension(ext)
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                do {
-                    try FileManager.default.removeItem(at: fileURL)
-                    print("Deleted: \(fileURL.lastPathComponent)")
-                } catch {
-                    print("Error deleting \(fileURL.lastPathComponent): \(error)")
-                }
-            }
-        }
-        */
-        
         do {
             self.modelContainer = try ModelContainer(for: schema, configurations: [config])
             print("✅ ModelContainer created successfully")
@@ -81,7 +60,7 @@ struct BackupStatusApp: App {
             fatalError("Failed to create ModelContainer: \(error)")
         }
         
-        // Create LogManager directly without @StateObject wrapper
+        // Create LogManager
         self.logManager = LogManager(modelContainer: self.modelContainer)
     }
     
@@ -119,7 +98,6 @@ struct BackupStatusApp: App {
         .windowResizability(.contentSize)
         .defaultSize(width: 800, height: 600)
         
-        // In BackupStatusApp.swift, add a new window:
         Window("Backup Profiles", id: "profiles") {
             ProfileManagementView()
                 .modelContainer(modelContainer)
