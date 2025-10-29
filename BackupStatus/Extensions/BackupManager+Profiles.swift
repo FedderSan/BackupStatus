@@ -2,7 +2,7 @@
 //  BackupManager+Profiles.swift
 //  BackupStatus
 //
-//  Multi-profile backup support with WebDAV and Local - WITH SESSION TRACKING
+//  FIXED VERSION: Enhanced logging to ensure each profile maintains its own destination
 //
 
 import Foundation
@@ -43,41 +43,61 @@ extension BackupManager {
     // MARK: - Run All Profiles
     
     func runAllProfileBackups(force: Bool = false) async {
-        logManager.log("🚀 Running all enabled profile backups (force: \(force))", level: .info)
+        logManager.log("", level: .info)
+        logManager.log("╔═══════════════════════════════════════════════════════╗", level: .info)
+        logManager.log("║    STARTING MULTI-PROFILE BACKUP SEQUENCE             ║", level: .info)
+        logManager.log("╚═══════════════════════════════════════════════════════╝", level: .info)
+        logManager.log("🚀 Force mode: \(force ? "YES (ignoring intervals)" : "NO (respecting intervals)")", level: .info)
         
         let profiles = await getEnabledProfiles()
         
         guard !profiles.isEmpty else {
             logManager.log("⚠️ No enabled profiles found", level: .warning)
+            logManager.log("💡 Create and enable profiles in the Profiles window", level: .info)
             return
         }
         
-        logManager.log("📋 Found \(profiles.count) enabled profile(s)", level: .info)
+        logManager.log("📋 Found \(profiles.count) enabled profile(s):", level: .info)
+        for (index, profile) in profiles.enumerated() {
+            logManager.log("   \(index + 1). \(profile.name) → \(profile.fullDestinationPath)", level: .info)
+        }
+        logManager.log("", level: .info)
         
-        for profile in profiles {
-            logManager.log("▶️ Running profile: \(profile.name) (\(profile.remoteType.displayName))", level: .info)
+        for (index, profile) in profiles.enumerated() {
+            logManager.log("▶️  Processing profile \(index + 1) of \(profiles.count): \(profile.name)", level: .info)
             await runProfileBackup(profile, force: force)
+            logManager.log("", level: .info)
         }
         
-        logManager.log("✅ All profile backups completed", level: .info)
+        logManager.log("╔═══════════════════════════════════════════════════════╗", level: .info)
+        logManager.log("║    ALL PROFILE BACKUPS COMPLETED                      ║", level: .info)
+        logManager.log("╚═══════════════════════════════════════════════════════╝", level: .info)
     }
     
-    // MARK: - Run Single Profile
+    // MARK: - Run Single Profile (ENHANCED LOGGING)
     
     func runProfileBackup(_ profile: BackupProfile, force: Bool = false) async {
         guard profile.isEnabled else {
-            logManager.log("⏭️ Skipping disabled profile: \(profile.name)", level: .info)
+            logManager.log("⏭️  Skipping disabled profile: \(profile.name)", level: .info)
             return
         }
         
         // Get profile ID for updates
         let profileID = profile.persistentModelID
         
-        logManager.log("🔄 Starting backup for profile: \(profile.name)", level: .info)
-        logManager.log("📁 Source: \(profile.fullSourcePath)", level: .debug)
-        logManager.log("🎯 Destination: \(profile.fullDestinationPath)", level: .debug)
-        logManager.log("🔧 Type: \(profile.profileType.displayName)", level: .debug)
-        logManager.log("🌐 Remote: \(profile.remoteType.displayName)", level: .debug)
+        // ENHANCED: Very clear logging about which profile goes where
+        logManager.log("┌─────────────────────────────────────────────────────┐", level: .info)
+        logManager.log("│ PROFILE: \(profile.name)", level: .info)
+        logManager.log("├─────────────────────────────────────────────────────┤", level: .info)
+        logManager.log("│ 📂 Source:      \(profile.sourcePath)", level: .info)
+        logManager.log("│ 🎯 Destination: \(profile.destinationPath)", level: .info)
+        logManager.log("│ 📍 Full Dest:   \(profile.fullDestinationPath)", level: .info)
+        logManager.log("│ 🔧 Type:        \(profile.profileType.displayName)", level: .info)
+        logManager.log("│ 🌐 Remote:      \(profile.remoteType.displayName)", level: .info)
+        
+        // Show profile ID to verify we're using different profiles
+        logManager.log("│ 🆔 Profile ID:  \(String(describing: profileID))", level: .debug)
+        logManager.log("└─────────────────────────────────────────────────────┘", level: .info)
         
         // Validate configuration
         let validation = profile.validateConfiguration()
@@ -92,7 +112,7 @@ extension BackupManager {
             if let lastSuccess = profile.lastSuccessfulBackup {
                 let hoursSince = Date().timeIntervalSince(lastSuccess) / 3600
                 if hoursSince < Double(profile.backupIntervalHours) {
-                    logManager.log("⏭️ Skipping \(profile.name) - only \(String(format: "%.1f", hoursSince)) hours since last backup", level: .info)
+                    logManager.log("⏭️  Skipping \(profile.name) - only \(String(format: "%.1f", hoursSince)) hours since last backup (interval: \(profile.backupIntervalHours)h)", level: .info)
                     return
                 }
             }
@@ -109,6 +129,8 @@ extension BackupManager {
         }
         
         // Run backup based on profile type and remote type
+        logManager.log("🚀 Executing backup...", level: .info)
+        
         switch (profile.profileType, profile.remoteType) {
         case (.versioned, .local):
             await runVersionedLocalBackup(profile, profileID: profileID)
@@ -119,12 +141,15 @@ extension BackupManager {
         case (.oneWaySync, .webdav):
             await runOneWaySyncWebDAVBackup(profile, profileID: profileID)
         }
+        
+        logManager.log("✅ Profile '\(profile.name)' backup completed", level: .info)
     }
     
-    // MARK: - Local Versioned Backup
+    // MARK: - Local Versioned Backup (WITH ENHANCED LOGGING)
     
     private func runVersionedLocalBackup(_ profile: BackupProfile, profileID: PersistentIdentifier) async {
         logManager.log("📦 Running local versioned backup for: \(profile.name)", level: .info)
+        logManager.log("📍 Confirming destination: \(profile.destinationPath)", level: .info)
         
         // Create backup session and get its ID
         let sessionID = await dataActor.createBackupSession()
@@ -154,9 +179,11 @@ extension BackupManager {
             
             // Step 1: Sync to 'latest' folder
             let latestPath = profile.latestPath()
+            logManager.log("📂 Creating 'latest' directory at: \(latestPath)", level: .info)
             try fileManager.createDirectory(atPath: latestPath, withIntermediateDirectories: true, attributes: nil)
             
-            logManager.log("Syncing to latest folder: \(latestPath)", level: .info)
+            logManager.log("📤 Syncing FROM: \(profile.fullSourcePath)", level: .info)
+            logManager.log("📥 Syncing TO:   \(latestPath)", level: .info)
             
             let latestResult = await runRsyncCommand(
                 from: profile.fullSourcePath,
@@ -176,11 +203,13 @@ extension BackupManager {
                 return
             }
             
+            logManager.log("✅ 'Latest' folder sync completed", level: .info)
+            
             // Step 2: Create version if enabled
             if profile.createVersions {
                 let versionPath = profile.versionPath(for: date)
                 
-                logManager.log("Creating version snapshot: \(versionPath)", level: .info)
+                logManager.log("📸 Creating version snapshot at: \(versionPath)", level: .info)
                 
                 try fileManager.createDirectory(
                     atPath: URL(fileURLWithPath: versionPath).deletingLastPathComponent().path,
@@ -204,7 +233,11 @@ extension BackupManager {
                     
                     if !versionResult.success {
                         logManager.log("❌ Version backup failed: \(versionResult.error ?? "Unknown")", level: .warning)
+                    } else {
+                        logManager.log("✅ Version created successfully", level: .info)
                     }
+                } else {
+                    logManager.log("✅ Version created with hard links", level: .info)
                 }
                 
                 await cleanupProfileVersions(profile)
@@ -226,10 +259,13 @@ extension BackupManager {
                 logManager.log("❌ Failed to update session: \(error)", level: .error)
             }
             
-            logManager.log("✅ Versioned backup completed for \(profile.name): \(stats.fileCount) files, \(ByteCountFormatter.string(fromByteCount: stats.totalSize, countStyle: .file))", level: .info)
+            logManager.log("✅ Versioned backup completed for '\(profile.name)':", level: .info)
+            logManager.log("   📊 Files: \(stats.fileCount)", level: .info)
+            logManager.log("   💾 Size: \(ByteCountFormatter.string(fromByteCount: stats.totalSize, countStyle: .file))", level: .info)
+            logManager.log("   📍 Location: \(profile.destinationPath)", level: .info)
             
         } catch {
-            logManager.log("❌ Versioned backup failed for \(profile.name): \(error)", level: .error)
+            logManager.log("❌ Versioned backup failed for '\(profile.name)': \(error)", level: .error)
             do {
                 try await dataActor.updateSessionStatus(sessionID, status: .failed, error: error.localizedDescription)
             } catch {
@@ -242,6 +278,7 @@ extension BackupManager {
     
     private func runVersionedWebDAVBackup(_ profile: BackupProfile, profileID: PersistentIdentifier) async {
         logManager.log("☁️ Running WebDAV versioned backup for: \(profile.name)", level: .info)
+        logManager.log("🌐 WebDAV path: \(profile.fullDestinationPath)", level: .info)
         
         // Create backup session and get its ID
         let sessionID = await dataActor.createBackupSession()
@@ -331,13 +368,15 @@ extension BackupManager {
             logManager.log("❌ Failed to update session: \(error)", level: .error)
         }
         
-        logManager.log("✅ WebDAV backup completed for \(profile.name)", level: .info)
+        logManager.log("✅ WebDAV backup completed for '\(profile.name)'", level: .info)
+        logManager.log("   🌐 Remote: \(profile.fullDestinationPath)", level: .info)
     }
     
     // MARK: - Local One-Way Sync
     
     private func runOneWaySyncLocalBackup(_ profile: BackupProfile, profileID: PersistentIdentifier) async {
         logManager.log("🔄 Running local one-way sync for: \(profile.name)", level: .info)
+        logManager.log("📍 Sync destination: \(profile.destinationPath)", level: .info)
         
         // Create backup session and get its ID
         let sessionID = await dataActor.createBackupSession()
@@ -371,6 +410,7 @@ extension BackupManager {
             }
             
             let destinationPath = profile.fullDestinationPath
+            logManager.log("📂 Ensuring destination exists: \(destinationPath)", level: .info)
             try fileManager.createDirectory(atPath: destinationPath, withIntermediateDirectories: true, attributes: nil)
             
             if profile.useTrashFolder {
@@ -382,6 +422,10 @@ extension BackupManager {
                 
                 try fileManager.createDirectory(atPath: trashSessionPath, withIntermediateDirectories: true, attributes: nil)
                 logManager.log("🗑️ Created trash folder: \(trashSessionPath)", level: .info)
+                
+                logManager.log("📤 Syncing FROM: \(profile.fullSourcePath)", level: .info)
+                logManager.log("📥 Syncing TO:   \(destinationPath)", level: .info)
+                logManager.log("🗑️ Trash dir:    \(trashSessionPath)", level: .info)
                 
                 let syncResult = await runRsyncWithTrash(
                     from: profile.fullSourcePath,
@@ -415,6 +459,9 @@ extension BackupManager {
                 
             } else {
                 logManager.log("⚠️ Using hard delete (no trash folder)", level: .warning)
+                
+                logManager.log("📤 Syncing FROM: \(profile.fullSourcePath)", level: .info)
+                logManager.log("📥 Syncing TO:   \(destinationPath)", level: .info)
                 
                 let syncResult = await runRsyncCommand(
                     from: profile.fullSourcePath,
@@ -451,10 +498,13 @@ extension BackupManager {
                 logManager.log("❌ Failed to update session: \(error)", level: .error)
             }
             
-            logManager.log("✅ One-way sync completed for \(profile.name): \(stats.fileCount) files, \(ByteCountFormatter.string(fromByteCount: stats.totalSize, countStyle: .file))", level: .info)
+            logManager.log("✅ One-way sync completed for '\(profile.name)':", level: .info)
+            logManager.log("   📊 Files: \(stats.fileCount)", level: .info)
+            logManager.log("   💾 Size: \(ByteCountFormatter.string(fromByteCount: stats.totalSize, countStyle: .file))", level: .info)
+            logManager.log("   📍 Location: \(profile.destinationPath)", level: .info)
             
         } catch {
-            logManager.log("❌ One-way sync failed for \(profile.name): \(error)", level: .error)
+            logManager.log("❌ One-way sync failed for '\(profile.name)': \(error)", level: .error)
             do {
                 try await dataActor.updateSessionStatus(sessionID, status: .failed, error: error.localizedDescription)
             } catch {
@@ -467,6 +517,7 @@ extension BackupManager {
     
     private func runOneWaySyncWebDAVBackup(_ profile: BackupProfile, profileID: PersistentIdentifier) async {
         logManager.log("☁️ Running WebDAV one-way sync for: \(profile.name)", level: .info)
+        logManager.log("🌐 WebDAV path: \(profile.fullDestinationPath)", level: .info)
         
         // Create backup session and get its ID
         let sessionID = await dataActor.createBackupSession()
@@ -521,7 +572,8 @@ extension BackupManager {
             logManager.log("❌ Failed to update session: \(error)", level: .error)
         }
         
-        logManager.log("✅ WebDAV sync completed for \(profile.name)", level: .info)
+        logManager.log("✅ WebDAV sync completed for '\(profile.name)'", level: .info)
+        logManager.log("   🌐 Remote: \(profile.fullDestinationPath)", level: .info)
     }
     
     // MARK: - rsync with Trash Support (HELPER FUNCTION)

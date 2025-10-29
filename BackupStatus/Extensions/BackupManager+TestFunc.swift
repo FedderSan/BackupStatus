@@ -2,91 +2,137 @@
 //  BackupManager+TestFunc.swift
 //  BackupStatus
 //
-//  Created by Daniel Feddersen on 21/10/2025.
+//  FIXED VERSION: Enhanced connection testing with clear per-profile results
 //
 
 import Foundation
 
 extension BackupManager {
     
-    // MARK: - Connection Test (Profile-Based)
+    // MARK: - Connection Test (ENHANCED - Profile-Based with Clear Results)
     
     func testConnection() async -> Bool {
-        logManager.log("🔍 Testing connection for enabled profiles", level: .info)
+        logManager.log("", level: .info)
+        logManager.log("╔═══════════════════════════════════════════════════════╗", level: .info)
+        logManager.log("║    TESTING CONNECTION FOR ALL ENABLED PROFILES        ║", level: .info)
+        logManager.log("╚═══════════════════════════════════════════════════════╝", level: .info)
         
         let profiles = await getEnabledProfiles()
         
         guard !profiles.isEmpty else {
             logManager.log("❌ No enabled profiles to test", level: .error)
+            logManager.log("💡 Create and enable profiles in the Profiles window", level: .info)
             return false
         }
         
+        logManager.log("📋 Found \(profiles.count) enabled profile(s) to test", level: .info)
+        logManager.log("", level: .info)
+        
+        var testResults: [(profile: String, passed: Bool, message: String)] = []
         var allTestsPassed = true
         
-        for profile in profiles {
-            logManager.log("Testing profile: \(profile.name) (\(profile.remoteType.displayName))", level: .info)
+        for (index, profile) in profiles.enumerated() {
+            logManager.log("┌─────────────────────────────────────────────────────┐", level: .info)
+            logManager.log("│ TESTING PROFILE \(index + 1)/\(profiles.count): \(profile.name)", level: .info)
+            logManager.log("├─────────────────────────────────────────────────────┤", level: .info)
+            logManager.log("│ 📍 Source:      \(profile.sourcePath)", level: .info)
+            logManager.log("│ 🎯 Destination: \(profile.destinationPath)", level: .info)
+            logManager.log("│ 🌐 Type:        \(profile.remoteType.displayName)", level: .info)
+            logManager.log("└─────────────────────────────────────────────────────┘", level: .info)
             
             let validation = profile.validateConfiguration()
             guard validation.isValid else {
-                logManager.log("❌ Profile '\(profile.name)' configuration invalid: \(validation.errors.joined(separator: ", "))", level: .error)
+                let errorMsg = "Configuration invalid: \(validation.errors.joined(separator: ", "))"
+                logManager.log("❌ \(errorMsg)", level: .error)
+                testResults.append((profile.name, false, errorMsg))
                 allTestsPassed = false
+                logManager.log("", level: .info)
                 continue
             }
             
             let testPassed: Bool
+            let testMessage: String
             
             switch profile.remoteType {
             case .local:
-                testPassed = await testLocalConnectionForProfile(profile)
+                let result = await testLocalConnectionForProfile(profile)
+                testPassed = result.0
+                testMessage = result.1
             case .webdav:
-                testPassed = await testWebDAVConnectionForProfile(profile)
+                let result = await testWebDAVConnectionForProfile(profile)
+                testPassed = result.0
+                testMessage = result.1
             }
             
+            testResults.append((profile.name, testPassed, testMessage))
+            
             if testPassed {
-                logManager.log("✅ Profile '\(profile.name)' connection test passed", level: .info)
+                logManager.log("✅ Profile '\(profile.name)' connection test PASSED", level: .info)
             } else {
-                logManager.log("❌ Profile '\(profile.name)' connection test failed", level: .error)
+                logManager.log("❌ Profile '\(profile.name)' connection test FAILED: \(testMessage)", level: .error)
                 allTestsPassed = false
             }
+            
+            logManager.log("", level: .info)
+        }
+        
+        // Summary
+        logManager.log("╔═══════════════════════════════════════════════════════╗", level: .info)
+        logManager.log("║    CONNECTION TEST SUMMARY                            ║", level: .info)
+        logManager.log("╚═══════════════════════════════════════════════════════╝", level: .info)
+        
+        for result in testResults {
+            let icon = result.passed ? "✅" : "❌"
+            let status = result.passed ? "PASSED" : "FAILED"
+            logManager.log("\(icon) \(result.profile): \(status)", level: result.passed ? .info : .error)
+            if !result.passed {
+                logManager.log("   └─ \(result.message)", level: .error)
+            }
+        }
+        
+        let passedCount = testResults.filter { $0.passed }.count
+        logManager.log("", level: .info)
+        logManager.log("📊 Results: \(passedCount)/\(testResults.count) profiles passed", level: allTestsPassed ? .info : .warning)
+        
+        if allTestsPassed {
+            logManager.log("🎉 All connection tests passed!", level: .info)
+        } else {
+            logManager.log("⚠️ Some connection tests failed. Check the details above.", level: .warning)
         }
         
         return allTestsPassed
     }
     
-    // MARK: - Profile-Specific Connection Tests
+    // MARK: - Profile-Specific Connection Tests (Enhanced with return messages)
     
-    private func testLocalConnectionForProfile(_ profile: BackupProfile) async -> Bool {
+    private func testLocalConnectionForProfile(_ profile: BackupProfile) async -> (Bool, String) {
         let fileManager = FileManager.default
         
         // Test source path
         var isSourceDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: profile.sourcePath, isDirectory: &isSourceDirectory),
               isSourceDirectory.boolValue else {
-            logManager.log("❌ Source path does not exist or is not a directory: \(profile.sourcePath)", level: .error)
-            return false
+            return (false, "Source path does not exist or is not a directory")
         }
         
         guard fileManager.isReadableFile(atPath: profile.sourcePath) else {
-            logManager.log("❌ Source path is not readable: \(profile.sourcePath)", level: .error)
-            return false
+            return (false, "Source path is not readable")
         }
         
-        logManager.log("✅ Source path OK: \(profile.sourcePath)", level: .debug)
+        logManager.log("   ✅ Source path OK", level: .debug)
         
         // Test destination path
         var isDestDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: profile.destinationPath, isDirectory: &isDestDirectory),
               isDestDirectory.boolValue else {
-            logManager.log("❌ Destination path does not exist or is not a directory: \(profile.destinationPath)", level: .error)
-            return false
+            return (false, "Destination path does not exist or is not a directory")
         }
         
         guard fileManager.isWritableFile(atPath: profile.destinationPath) else {
-            logManager.log("❌ Destination path is not writable: \(profile.destinationPath)", level: .error)
-            return false
+            return (false, "Destination path is not writable")
         }
         
-        logManager.log("✅ Destination path OK: \(profile.destinationPath)", level: .debug)
+        logManager.log("   ✅ Destination path OK", level: .debug)
         
         // Test creating a temporary file
         let testFileName = UUID().uuidString
@@ -95,29 +141,27 @@ extension BackupManager {
         do {
             try "test".write(toFile: testFilePath, atomically: true, encoding: .utf8)
             try fileManager.removeItem(atPath: testFilePath)
-            logManager.log("✅ Write test successful", level: .debug)
-            return true
+            logManager.log("   ✅ Write test successful", level: .debug)
+            return (true, "All tests passed")
         } catch {
-            logManager.log("❌ Write test failed: \(error)", level: .error)
-            return false
+            return (false, "Write test failed: \(error.localizedDescription)")
         }
     }
     
-    private func testWebDAVConnectionForProfile(_ profile: BackupProfile) async -> Bool {
-        logManager.log("Testing WebDAV connection for profile: \(profile.name)", level: .debug)
+    private func testWebDAVConnectionForProfile(_ profile: BackupProfile) async -> (Bool, String) {
+        logManager.log("   🔍 Testing WebDAV connection...", level: .debug)
         
         // Test 1: Basic network connectivity
-        guard await testNetworkReachability(profile.webdavServerHost) else {
-            logManager.log("❌ Network unreachable: \(profile.webdavServerHost)", level: .error)
-            return false
+        let networkReachable = await testNetworkReachability(profile.webdavServerHost)
+        guard networkReachable else {
+            return (false, "Network unreachable: \(profile.webdavServerHost)")
         }
         
-        logManager.log("✅ Network reachable", level: .debug)
+        logManager.log("   ✅ Network reachable", level: .debug)
         
         // Test 2: WebDAV authentication and access
         guard let plainPassword = await profile.getPlainPassword() else {
-            logManager.log("❌ Failed to retrieve password", level: .error)
-            return false
+            return (false, "Failed to retrieve password")
         }
         
         let webdavTest = await testWebDAVURL(
@@ -128,12 +172,11 @@ extension BackupManager {
         )
         
         if webdavTest {
-            logManager.log("✅ WebDAV connection successful", level: .info)
+            logManager.log("   ✅ WebDAV connection successful", level: .debug)
+            return (true, "All tests passed")
         } else {
-            logManager.log("❌ WebDAV connection failed", level: .error)
+            return (false, "WebDAV connection failed - check credentials and URL")
         }
-        
-        return webdavTest
     }
     
     // MARK: - Low-Level Test Functions
